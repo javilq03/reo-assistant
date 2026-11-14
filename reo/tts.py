@@ -85,6 +85,29 @@ def speakable(text: str, limit: int = 1500) -> str:
     return t
 
 
+def parse_pronunciations(rules: str) -> list[tuple[re.Pattern, str]]:
+    """'word = say this' lines (also '->' or ':') into whole-word, case-insensitive substitutions."""
+    out = []
+    for line in (rules or "").splitlines():
+        m = re.match(r"^\s*(.+?)\s*(?:=>|->|=|:)\s*(.+?)\s*$", line)
+        if m and not line.lstrip().startswith("#"):
+            out.append((re.compile(r"(?<!\w)" + re.escape(m.group(1)) + r"(?!\w)", re.I), m.group(2)))
+    return out
+
+
+def apply_pronunciations(text: str, rules: str) -> str:
+    for pat, say in parse_pronunciations(rules):
+        text = pat.sub(lambda _m, say=say: say, text)
+    return text
+
+
+def clamp_volume(v) -> int:
+    try:
+        return max(0, min(100, int(v)))
+    except (TypeError, ValueError):
+        return 100
+
+
 # ---------------------------------------------------------------------------
 # Engines and voices on disk
 # ---------------------------------------------------------------------------
@@ -538,8 +561,12 @@ class _SapiBackend:
                     self._voice_id = voice_id
                     break
 
-    def speak(self, text: str, cancel: threading.Event, voice_id: str | None = None):
+    def speak(self, text: str, cancel: threading.Event, voice_id: str | None = None, volume: int = 100):
         self._ensure(voice_id)
+        try:
+            self._voice.Volume = clamp_volume(volume)
+        except Exception:
+            pass
         self._voice.Speak(text, 1 | 2)  # async + purge
         while not self._voice.WaitUntilDone(80):
             if cancel.is_set():
@@ -558,7 +585,7 @@ class _PsBackend:
     """Windows speech through a hidden PowerShell: the zero-dependency fallback (works without comtypes or Piper)."""
     _SCRIPT = ("[Console]::InputEncoding=[Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; "
                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer; $v=$env:REO_VOICE; "
-               "if($v){try{$s.SelectVoice($v)}catch{}}; $s.SetOutputToDefaultAudioDevice(); $s.Speak([Console]::In.ReadToEnd())")
+               "if($v){try{$s.SelectVoice($v)}catch{}}; $s.Volume=[int]$env:REO_VOL; $s.SetOutputToDefaultAudioDevice(); $s.Speak([Console]::In.ReadToEnd())")
 
     def __init__(self):
         self._proc = None
@@ -566,8 +593,9 @@ class _PsBackend:
     def available(self) -> bool:
         return ps_available()
 
-    def speak(self, text: str, cancel: threading.Event, voice_id: str | None = None):
-        env = dict(os.environ, REO_VOICE=(voice_id[5:] if voice_id and voice_id.startswith("sapi:") else ""))
+    def speak(self, text: str, cancel: threading.Event, voice_id: str | None = None, volume: int = 100):
+        env = dict(os.environ, REO_VOICE=(voice_id[5:] if voice_id and voice_id.startswith("sapi:") else ""),
+                   REO_VOL=str(clamp_volume(volume)))
         self._proc = proc = subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", self._SCRIPT], stdin=subprocess.PIPE,
                                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env,
                                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -637,7 +665,7 @@ class _PiperBackend:
                 chunks.append(np.asarray(chunk.audio_float_array, dtype=np.float32).reshape(-1))
         return (np.concatenate(chunks) if chunks else None), rate
 
-    def speak(self, text: str, cancel: threading.Event, voice_id: str):
+    def speak(self, text: str, cancel: threading.Event, voice_id: str, volume: int = 100):
         try:
             import sounddevice as sd
         except Exception as e:
@@ -646,6 +674,7 @@ class _PiperBackend:
         audio, rate = self._audio(voice, text, cancel)
         if cancel.is_set() or audio is None or not len(audio):
             return
+        audio = audio * (clamp_volume(volume) / 100.0)
         sd.play(audio, rate)
         try:
             while sd.get_stream().active:
@@ -680,6 +709,13 @@ class Speaker:
 
     def _system_available(self) -> bool:
         return self._sapi.available() or self._ps.available()
+
+    def _volume(self) -> int:
+        return clamp_volume(self._settings.get("volume")) if self._settings is not None else 100
+
+    def _say(self, text: str) -> str:
+        rules = self._settings.get("pronunciations") if self._settings is not None else ""
+        return apply_pronunciations(text, rules or "")
 
     def _voice_id(self) -> str:
         if self._settings is not None:
@@ -752,20 +788,21 @@ class Speaker:
         name = voice_id if voice_id and voice_id.startswith("sapi:") else None
         if self._sapi.available():
             try:
-                return self._sapi.speak(text, self._cancel, name)
+                return self._sapi.speak(text, self._cancel, name, self._volume())
             except Exception as e:                                # noqa: BLE001 - fall through to the PowerShell voice
                 log.warning("comtypes speech failed (%s); trying PowerShell", e)
         if self._ps.available():
-            return self._ps.speak(text, self._cancel, name)
+            return self._ps.speak(text, self._cancel, name, self._volume())
         raise SpeechError("no_engine", "No speech engine is available on this PC.")
 
     def _speak_one(self, text: str, voice_id: str):
+        text = self._say(text)
         if self._is_sapi(voice_id):
             return self._speak_sapi(text, voice_id)
         ready = self.readiness(voice_id)
         if ready["ok"]:
             try:
-                return self._piper.speak(text, self._cancel, voice_id)
+                return self._piper.speak(text, self._cancel, voice_id, self._volume())
             except SpeechError as e:
                 code, msg = e.code, e.message
             except Exception as e:                                # noqa: BLE001 - a broken voice must not leave Reo silent

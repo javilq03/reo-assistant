@@ -367,3 +367,12 @@ def test_conversations_panel_docks_in_wide_windows_and_overlays_in_narrow_ones(p
     page.click("#avatar")
     assert page.evaluate("getComputedStyle(document.querySelector('#drawer')).position") == "fixed"   # narrow window: the usual slide-over
     shot(page, "drawer_narrow")
+
+
+def test_menu_has_volume_slider_and_pronunciation_rules(page):
+    page.click("#trayLine"); page.click("#menuBtn")
+    expect(page.locator("#volumeRange")).to_be_visible()
+    page.locator("#volumeRange").evaluate("e => { e.value = 40; e.dispatchEvent(new Event('input')); }")
+    expect(page.locator("#volumeOut")).to_have_text("40%")
+    expect(page.locator("#pronRules")).to_be_visible()
+    assert _inside(page, "#pronRules", ".menu-dialog") and _inside(page, "#volumeRange", ".menu-dialog")

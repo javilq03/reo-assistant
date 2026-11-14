@@ -112,6 +112,19 @@
           <ul class="menu-list" id="voiceList" role="listbox" aria-label="Voicebanks" hidden></ul>
         </div>
         <div class="menu-sep"></div>
+        <div class="menu-row">
+          <div class="menu-row-head">
+            <span class="menu-label">Volume</span>
+            <div class="range-row voice-volume"><input type="range" id="volumeRange" min="0" max="100" step="1" value="100" aria-label="Voice volume"><output id="volumeOut">100%</output></div>
+          </div>
+        </div>
+        <div class="menu-sep"></div>
+        <div class="menu-row">
+          <div class="menu-row-head"><span class="menu-label">Pronunciation</span></div>
+          <textarea class="pron-in" id="pronRules" rows="3" spellcheck="false" aria-label="Pronunciation rules" placeholder="colega = co le ga"></textarea>
+          <div class="hint2">One rule per line: the word = how it should sound. Only changes speech, not the text.</div>
+        </div>
+        <div class="menu-sep"></div>
         <div class="menu-row"><div class="menu-row-head">
           <span class="menu-label">Discord</span>
           <button type="button" class="menu-select connect" id="discordBtn">Connect</button>

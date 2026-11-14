@@ -138,7 +138,7 @@ def make_speaker(monkeypatch, piper_ok, sapi_ok, installed=False):
     monkeypatch.setattr(tts, "piper_status", lambda refresh=False: (piper_ok, "" if piper_ok else "ModuleNotFoundError: piper"))
     monkeypatch.setattr(tts, "voice_installed", lambda k: installed)
     monkeypatch.setattr(sp._sapi, "available", lambda: sapi_ok)
-    monkeypatch.setattr(sp._sapi, "speak", lambda text, cancel, vid=None: spoken.append(text))
+    monkeypatch.setattr(sp._sapi, "speak", lambda text, cancel, vid=None, vol=100: spoken.append(text))
     return sp, events, spoken
 
 
@@ -257,3 +257,30 @@ def test_bridge_exposes_downloads_and_flags_busy_voices(home, monkeypatch):
     assert voices[KEY]["installed"] is True and voices["en_US-lessac-medium"]["installed"] is False
     assert b.voice_status()["engine"].keys() >= {"piper", "sapi", "frozen", "can_install"}
     assert b.tts_preview(KEY)["ok"] in (True, False)
+
+
+def test_pronunciation_rules_replace_whole_words_only():
+    r = "colega = co le ga\n# comment\nReo -> Ray-oh"
+    assert tts.apply_pronunciations("Hola Colega, colegas y colega.", r) == "Hola co le ga, colegas y co le ga."
+    assert tts.apply_pronunciations("Hi Reo", r) == "Hi Ray-oh"
+    assert tts.apply_pronunciations("nada", "") == "nada"
+
+
+def test_volume_is_clamped_and_default_rule_ships():
+    from reo.config import DEFAULTS
+    assert [tts.clamp_volume(x) for x in (150, -5, "40", None)] == [100, 0, 40, 100]
+    assert tts.apply_pronunciations("colega", DEFAULTS["pronunciations"]) == "co le ga" and DEFAULTS["volume"] == 100
+
+
+def test_speaker_applies_rules_and_volume():
+    class S:
+        d = {"pronunciations": "colega = co le ga", "volume": 30, "voice": "system"}
+        def get(self, k): return self.d.get(k)
+    sp = tts.Speaker(lambda **k: None, S())
+    got = {}
+    class B:
+        def available(self): return True
+        def speak(self, text, cancel, name=None, volume=100): got.update(text=text, vol=volume)
+    sp._sapi = B()
+    sp._speak_one("Hola colega", "system")
+    assert got == {"text": "Hola co le ga", "vol": 30}

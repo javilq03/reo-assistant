@@ -178,7 +178,7 @@ def test_speaker_uses_powershell_when_comtypes_is_missing(monkeypatch):
     sp = tts.Speaker(lambda **e: ev.append(e), None)
     monkeypatch.setattr(sp._sapi, "available", lambda: False)
     monkeypatch.setattr(tts, "ps_available", lambda: True)
-    monkeypatch.setattr(sp._ps, "speak", lambda text, cancel, name=None: spoken.append(text))
+    monkeypatch.setattr(sp._ps, "speak", lambda text, cancel, name=None, vol=100: spoken.append(text))
     assert sp.available() and sp.readiness("system") == {"ok": True}
     sp.speak("hello there")
     end = time.time() + 3
@@ -193,7 +193,7 @@ def test_missing_engine_falls_back_speaks_and_repairs_in_background(home, monkey
     monkeypatch.setattr(tts, "piper_status", lambda refresh=False: (False, "ModuleNotFoundError: No module named 'piper'"))
     monkeypatch.setattr(sp._sapi, "available", lambda: False)
     monkeypatch.setattr(tts, "ps_available", lambda: True)
-    monkeypatch.setattr(sp._ps, "speak", lambda text, cancel, name=None: spoken.append(text))
+    monkeypatch.setattr(sp._ps, "speak", lambda text, cancel, name=None, vol=100: spoken.append(text))
     r = sp.readiness("en_US-amy-low")
     assert r["code"] == "engine_missing" and "piper-tts" not in r["message"] and "not set up yet" in r["message"]
     sp.speak("hi", voice_id="en_US-amy-low")

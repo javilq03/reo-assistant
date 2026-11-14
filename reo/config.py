@@ -302,6 +302,8 @@ DEFAULTS: dict = {
     "orb_speak": True,           # read replies aloud in orb mode
     "orb_pos": [],               # [x, y] where the floating orb was last left
     "voice": "",
+    "volume": 100,               # speech loudness, 0-100
+    "pronunciations": "colega = co le ga",   # one "word = how to say it" per line; applied to spoken replies only
     "custom_models": [],         # [{id,name,path}] for GGUFs the user pointed at
 }
 

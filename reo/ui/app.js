@@ -727,7 +727,12 @@ function closeDrawer(refocus = true) {
 
 // ------------------------------------------------------------------ tray + menu
 function setTray(open) { $('tray').classList.toggle('open', open); $('trayLine').setAttribute('aria-expanded', open); if (open) refreshVoiceCard(); }
-function openMenu() { collapseLists(); $('menuOverlay').hidden = false; $('menuClose').focus(); updateUI(); }
+function syncSpeechSettings() {
+  const v = state.settings.volume == null ? 100 : state.settings.volume;
+  $('volumeRange').value = v; $('volumeOut').textContent = v + '%';
+  $('pronRules').value = state.settings.pronunciations == null ? '' : state.settings.pronunciations;
+}
+function openMenu() { syncSpeechSettings(); collapseLists(); $('menuOverlay').hidden = false; $('menuClose').focus(); updateUI(); }
 function closeMenu() { if ($('menuOverlay').hidden) return; $('menuOverlay').hidden = true; $('menuBtn').focus(); }
 
 const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-10"/></svg>';
@@ -1332,6 +1337,11 @@ function wire() {
 
   $('micSelect').addEventListener('click', () => { const open = $('micList').hidden; collapseLists(); setListOpen($('micSelect'), $('micList'), open); if (open) loadMics(); });
   $('voiceSelect').addEventListener('click', () => { const open = $('voiceList').hidden; collapseLists(); setListOpen($('voiceSelect'), $('voiceList'), open); if (open) loadVoices(); });
+  const vr = $('volumeRange'), pr = $('pronRules');
+  vr.addEventListener('input', () => { $('volumeOut').textContent = vr.value + '%'; saveSetting({ volume: +vr.value }); });
+  vr.addEventListener('change', () => saveSetting({ volume: +vr.value }, true));
+  pr.addEventListener('input', () => saveSetting({ pronunciations: pr.value }));
+  pr.addEventListener('change', () => saveSetting({ pronunciations: pr.value }, true));
   $('voicePreview').addEventListener('click', async () => {
     if (!state.tts) { flash('Speech output is not available'); return; }
     const btn = $('voicePreview');

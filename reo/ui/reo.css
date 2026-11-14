@@ -511,3 +511,6 @@ body.native-win .drawer, body.native-win .drawer-scrim { top: 34px; }
 #cloudBtn:hover { box-shadow: 0 0 0 3px var(--gold-soft); }
 #cloudBtn:active { transform: scale(.92); }
 #cloudBtn[aria-pressed="true"] { background: var(--gold-grad); color: #0a0a0b; box-shadow: var(--gold-shine); }
+.pron-in { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: var(--surface-2); color: inherit; font: inherit; font-size: 13px; line-height: 1.45; }
+.voice-volume { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
+.voice-volume input[type=range] { max-width: 220px; }
