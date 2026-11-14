@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reo</title>
+<link rel="icon" href="assets/reo.png" type="image/png">
+<link rel="stylesheet" href="reo.css">
+<!--DEV-->
+</head>
+<body>
+<div class="winbar" id="winbar" hidden>
+  <img class="winicon" alt="" src="assets/reo.png"><span class="wintitle">Reo</span>
+  <div class="wincontrols">
+    <button type="button" id="winMin" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 12 12"><path d="M2 6h8"/></svg></button>
+    <button type="button" id="winMax" title="Maximize" aria-label="Maximize"><svg viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/></svg></button>
+    <button type="button" id="winClose" class="close" title="Close" aria-label="Close Reo"><svg viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg></button>
+  </div>
+</div>
+<div class="app">
+  <header>
+    <div class="avatar" id="avatar" role="button" tabindex="0" aria-label="Conversations" aria-expanded="false" title="Conversations (Ctrl+K)"><img alt="Reo" id="avatarImg"></div>
+    <div class="id">
+      <div class="namerow"><h1 id="name">Reo</h1>
+        <button id="cloudBtn" type="button" aria-pressed="false" title="Cloud model: answer with the API provider instead of the local model" aria-label="Cloud model">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/></svg>
+        </button>
+      </div>
+      <div class="status"><span class="dot busy" id="dot"></span><span id="status">Starting...</span></div>
+    </div>
+    <button class="chip" id="modelChip" type="button" title="Models"><span class="dot off" id="chipDot"></span><span id="chipText">No model</span></button>
+    <button id="orbBtn" type="button" title="Orb mode" aria-label="Orb mode" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <button id="mic" type="button" title="Hands-free speech" aria-label="Voice input" aria-pressed="false">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/></svg>
+    </button>
+  </header>
+
+  <main id="messages" aria-live="polite"></main>
+
+  <div class="tray" id="tray">
+    <button class="tray-line" id="trayLine" type="button" aria-expanded="false" aria-controls="trayPanel" title="Options">
+      <span class="grip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></span>
+    </button>
+    <div class="tray-panel" id="trayPanel">
+      <div class="tray-inner">
+        <div class="tray-row">
+          <button class="switch" type="button" role="switch" aria-checked="false" data-key="deepThinking" title="Slower, more careful answers">
+            <span class="track"><span class="thumb"></span></span><span>Deep thinking</span>
+          </button>
+          <button class="switch" type="button" role="switch" aria-checked="false" data-key="computerControl" title="Allows Reo to operate your computer, but only when you ask him to in a message">
+            <span class="track"><span class="thumb"></span></span><span>Computer Control</span>
+          </button>
+          <button class="menu-btn" id="menuBtn" type="button" aria-haspopup="dialog">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>Menu
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="menu-overlay" id="menuOverlay" hidden>
+    <div class="menu-dialog" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+      <div class="menu-head">
+        <h2 id="menuTitle">Menu</h2>
+        <button class="icon-btn" id="menuClose" type="button" aria-label="Close menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="menu-body" id="menuBody">
+        <div class="menu-row"><div class="menu-row-head">
+          <span class="menu-label">Models<span class="menu-sub" id="menuModelSub">No model loaded</span></span>
+          <button type="button" class="menu-select connect" data-panel="models">Manage</button>
+        </div></div>
+        <div class="menu-sep"></div>
+        <div class="menu-row"><div class="menu-row-head">
+          <span class="menu-label">API provider<span class="menu-sub" id="menuApiSub">Fallback not set up</span></span>
+          <button type="button" class="menu-select" data-panel="api">Set up</button>
+        </div></div>
+        <div class="menu-sep"></div>
+        <div class="menu-row"><div class="menu-row-head">
+          <span class="menu-label">Settings<span class="menu-sub">Personality, generation, performance</span></span>
+          <button type="button" class="menu-select" data-panel="settings">Open</button>
+        </div></div>
+        <div class="menu-sep"></div>
+        <div class="menu-row">
+          <div class="menu-row-head">
+            <span class="menu-label">Microphone</span>
+            <button type="button" class="menu-select" id="micSelect" aria-haspopup="listbox" aria-expanded="false"><span class="val" id="micValue">System default</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+          </div>
+          <ul class="menu-list" id="micList" role="listbox" aria-label="Microphones" hidden></ul>
+        </div>
+        <div class="menu-sep"></div>
+        <div class="menu-row">
+          <div class="menu-row-head">
+            <span class="menu-label">Reo's Voice</span>
+            <div class="voice-controls">
+              <button type="button" class="menu-select" id="voiceSelect" aria-haspopup="listbox" aria-expanded="false"><span class="val" id="voiceValue">Not selected</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>
+              <button type="button" class="menu-select preview" id="voicePreview" title="Preview this voice" aria-label="Preview this voice">Preview</button>
+            </div>
+          </div>
+          <div class="voice-dl" id="voiceDl" role="status" aria-live="polite" hidden>
+            <div class="voice-dl-top">
+              <span class="voice-dl-msg" id="voiceDlMsg"></span>
+              <button type="button" class="menu-select connect" id="voiceDlBtn" hidden>Download</button>
+              <button type="button" class="voice-dl-cancel" id="voiceDlCancel" hidden>Cancel</button>
+            </div>
+            <div class="progress" id="voiceDlBar" hidden><i></i></div>
+            <div class="voice-dl-meta" id="voiceDlMeta" hidden></div>
+          </div>
+          <ul class="menu-list" id="voiceList" role="listbox" aria-label="Voicebanks" hidden></ul>
+        </div>
+        <div class="menu-sep"></div>
+        <div class="menu-row"><div class="menu-row-head">
+          <span class="menu-label">Discord</span>
+          <button type="button" class="menu-select connect" id="discordBtn">Connect</button>
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel-overlay" id="panelOverlay" hidden>
+    <div class="menu-dialog wide" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
+      <div class="menu-head">
+        <h2 id="panelTitle">Models</h2>
+        <button class="icon-btn" id="panelClose" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="tabs" role="tablist" id="panelTabs">
+        <button class="tab" role="tab" data-panel="models">Models</button>
+        <button class="tab" role="tab" data-panel="api">API provider</button>
+        <button class="tab" role="tab" data-panel="settings">Settings</button>
+      </div>
+      <div class="panel-body" id="panelBody"></div>
+    </div>
+  </div>
+
+  <div class="composer">
+    <div class="files" id="files"></div>
+    <div class="input-box">
+      <button class="attach-btn" id="attachBtn" type="button" title="Attach text or code files" aria-label="Attach files">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/></svg>
+      </button>
+      <textarea id="input" rows="1" placeholder="Write a message..." autofocus></textarea>
+      <button id="send" type="button" data-mode="mic" title="Dictate a message" aria-label="Dictate a message">
+        <svg class="ico-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        <svg class="ico-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4M8 22h8"/></svg>
+        <svg class="ico-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+      </button>
+    </div>
+    <input type="file" id="fileInput" multiple hidden>
+    <div class="hint">Enter to send, Shift+Enter for a new line</div>
+  </div>
+</div>
+
+<div class="drawer-scrim" id="drawerScrim"></div>
+<aside class="drawer" id="drawer" aria-label="Conversations">
+  <div class="drawer-top">
+    <button class="new-chat" id="newChat" type="button" title="New conversation (Ctrl+N)">
+      <span class="icon"><img alt="" id="drawerIcon"></span><span>New conversation</span>
+    </button>
+    <input class="in" id="search" type="search" placeholder="Search conversations" aria-label="Search conversations">
+  </div>
+  <div class="conv-list" id="convList"></div>
+</aside>
+
+<div class="orb-view" id="orb" data-state="idle">
+  <button id="orbExit" type="button" title="Back to chat (Esc)" aria-label="Back to chat">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+  <div class="orb-popup-host" id="orbPopupHost"></div>
+  <div class="orb-wrap" id="orbWrap" title="Click to mute or unmute">
+    <span class="orb-spin"></span>
+    <div class="orb"><img alt="Reo" id="orbImg"></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
