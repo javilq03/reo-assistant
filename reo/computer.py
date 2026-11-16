@@ -91,6 +91,7 @@ def used_computer(text: str) -> bool:
 
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.S | re.I)
+_BARE_RE = re.compile(r'\{\s*"do"\s*:\s*"[^"{}]*"[^{}]*\}')
 
 
 def prompt(w: int, h: int) -> str:
@@ -123,6 +124,7 @@ _ELSE = [re.compile(p, re.I) for p in (
     r"\b(?:write|escribe|escribir|type|teclea)\b[^.\n]{0,80}\b(?:in|into|on|en)\s+(?:the\s+|a\s+|my\s+|el\s+|la\s+|un\s+|mi\s+)?" + _APPWORDS,
     r"\b(?:search|busca|buscar|googlea|look up|lookup)\b[^.\n]{0,60}\b(?:on|in|en|with|con)\s+(?:google|youtube|bing|the browser|chrome|edge|firefox|brave|opera|el navegador|internet|the web)\b",
     r"\b(?:use|usa|utiliza|using)\s+(?:the\s+|el\s+|la\s+)?(?:firefox|chrome|edge|brave|opera|browser|navegador|notepad|bloc de notas|calculator|calculadora|explorer)\s+(?:to|para)\b",
+    r"\b(?:try|trying|tries|probar|prueba|intenta|intentar)\s+(?:to\s+|a\s+)?(?:opening|open|launching|launch|abrir|abre|lanzar)\b",
     r"\b(?:play|reproduce|pon|ponme)\b[^.\n]{0,60}\b(?:on|in|en)\s+(?:youtube|spotify)\b",
     r"\b(?:look up|lookup|visit|visita|entra a|abre)\s+(?:youtube|google|twitch|netflix|spotify|discord|reddit|twitter|github|gmail|whatsapp)\b",
     r"\b(?:run|ejecuta|execute)\s+(?:the\s+|el\s+|este\s+|that\s+)?(?:command|comando|script)\b",
@@ -174,6 +176,16 @@ def wants_control(text: str, prev_used: bool = False) -> bool:
 def parse_actions(text: str) -> tuple[list[dict], str]:
     """Split a reply into its actions and the remaining text."""
     acts: list[dict] = []
+    if not _ACTION_RE.search(text or ""):                          # small models often forget the <action> tags and write the bare JSON
+        bare = list(_BARE_RE.finditer(text or ""))
+        for m in bare:
+            try:
+                a = json.loads(m.group(0))
+                acts.append(a if isinstance(a, dict) else {"do": "_invalid", "raw": m.group(0)[:120]})
+            except ValueError:
+                acts.append({"do": "_invalid", "raw": m.group(0)[:120]})
+        if bare:
+            return acts, _BARE_RE.sub("", text or "").strip()
     for m in _ACTION_RE.finditer(text or ""):
         raw = m.group(1).strip()
         try:
@@ -373,11 +385,15 @@ class AppLauncher:
         found = self.ops.which(raw)
         if found:
             return Target("file", found, keywords_for(raw), raw)
-        if not raw.lower().endswith((".exe", ".bat", ".cmd", ".lnk")):
-            app = self.ops.find_start_app(raw)
-            if app:
-                display, appid = app
-                return Target("appsfolder", appid, tuple(dict.fromkeys((display.lower(), n))), display)
+        base = re.sub(r"\.(?:exe|bat|cmd|lnk)$", "", raw, flags=re.I).strip()     # the model often says "discord.exe": look for "discord"
+        app = self.ops.find_start_app(base) if base else None
+        if app:
+            display, appid = app
+            return Target("appsfolder", appid, tuple(dict.fromkeys((display.lower(), n, _norm(base)))), display)
+        finder = getattr(self.ops, "find_installed", None)                       # per-user installs (Discord, Slack...) that are not on PATH
+        hit = finder(base) if finder and base else None
+        if hit:
+            return Target("file", hit, keywords_for(base), base)
         return None
 
     def open_app(self, name: str) -> str:
@@ -922,6 +938,22 @@ class WinComputer:
                     continue
         except Exception:
             pass
+        return None
+
+    def find_installed(self, name):
+        """Look where per-user installers put programs: %LOCALAPPDATA%\\<name>\\[app-*\\]<name>.exe, ...\\Programs\\<name>\\, Program Files."""
+        import glob
+        n = re.sub(r"[^\w .-]", "", str(name or "")).strip()
+        if len(n) < 2:
+            return None
+        roots = [os.environ.get(k) for k in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)")]
+        for root in filter(None, roots):
+            for base in (os.path.join(root, n), os.path.join(root, "Programs", n)):
+                for pat in (f"{n}.exe", f"app-*\\{n}.exe", f"*\\{n}.exe"):
+                    hits = sorted(glob.glob(os.path.join(glob.escape(base), pat)), reverse=True)
+                    hits = [h for h in hits if os.path.isfile(h)]
+                    if hits:
+                        return hits[0]
         return None
 
     def find_start_app(self, name):

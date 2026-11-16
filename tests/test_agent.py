@@ -259,3 +259,25 @@ def test_window_on_another_virtual_desktop_is_not_reported_as_open():
     assert r.startswith("NOT CONFIRMED") and "another virtual desktop" in r
     L2, _ = opener(windows={4: C.Win("Calculator", "applicationframehost", cloaked=2)})
     assert L2.check_app("calculator").startswith("NOT OPEN") and "another virtual desktop" in L2.check_app("calculator")
+
+
+def test_exe_name_is_looked_up_in_the_start_menu_without_the_extension():
+    L, ops = opener(appears=(7, C.Win("Discord", "discord")), delay=0.5, apps=[{"Name": "Discord", "AppID": "com.squirrel.Discord.Discord"}])
+    r = L.open_app("discord.exe")
+    assert r.startswith("OPENED") and ops.launched[0].kind == "appsfolder"
+
+
+def test_per_user_install_folder_is_found_when_not_in_start_menu_or_path():
+    L, ops = opener(appears=(7, C.Win("Discord", "discord")), delay=0.5)
+    ops.find_installed = lambda name: r"C:\Users\j\AppData\Local\Discord\app-1.0.9\Discord.exe" if name == "Discord" else None
+    r = L.open_app("Discord")
+    assert r.startswith("OPENED") and ops.launched[0].target.endswith("Discord.exe")
+
+
+def test_bare_json_actions_are_still_executed_and_removed_from_the_text():
+    acts, rest = C.parse_actions('{"do":"app.open","name":"notepad"}\nOpening it.')
+    assert acts == [{"do": "app.open", "name": "notepad"}] and rest == "Opening it."
+
+
+def test_try_opening_counts_as_a_request():
+    assert C.wants_control("Okay, nothing works. Try opening Notepad just in case", True)
