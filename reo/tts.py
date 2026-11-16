@@ -673,7 +673,7 @@ class _PiperBackend:
                 chunks.append(np.asarray(chunk.audio_float_array, dtype=np.float32).reshape(-1))
         return (np.concatenate(chunks) if chunks else None), rate
 
-    def speak(self, text: str, cancel: threading.Event, voice_id: str, volume: int = 100):
+    def speak(self, text: str, cancel: threading.Event, voice_id: str, volume: int = 100, more: bool = False):
         try:
             import sounddevice as sd
         except Exception as e:
@@ -683,7 +683,7 @@ class _PiperBackend:
         if cancel.is_set() or audio is None or not len(audio):
             return
         audio = audio * (clamp_volume(volume) / 100.0)
-        audio = _pad_silence(audio, rate)
+        audio = _pad_silence(audio, rate, tail=0.06 if more else 0.45)      # a sentence is followed by another: no long gap
         sd.play(audio, rate)
         try:
             while sd.get_stream().active:
@@ -747,7 +747,7 @@ class Speaker:
             return {"ok": False, "code": "voice_missing", "message": f"The voice {_voice_name(voice_id)} is not downloaded yet."}
         return {"ok": True}
 
-    def speak(self, text: str, voice_id: str | None = None, strict: bool = False) -> dict:
+    def speak(self, text: str, voice_id: str | None = None, strict: bool = False, queue: bool = False) -> dict:
         """Speak text. `voice_id` overrides the setting for this utterance only. With strict=True (previews) a voice that is not ready
         is reported instead of being replaced by the Windows voice."""
         t = speakable(text)
@@ -762,7 +762,8 @@ class Speaker:
         if self._thread is None or not self._thread.is_alive():
             self._thread = threading.Thread(target=self._run, daemon=True, name="reo-tts")
             self._thread.start()
-        self._cancel.set()
+        if not queue:                                             # queue=True: streamed sentences play one after another
+            self._cancel.set()
         self._q.put((t, vid))
         return {"ok": True}
 
@@ -811,7 +812,7 @@ class Speaker:
         ready = self.readiness(voice_id)
         if ready["ok"]:
             try:
-                return self._piper.speak(text, self._cancel, voice_id, self._volume())
+                return self._piper.speak(text, self._cancel, voice_id, self._volume(), more=not self._q.empty())
             except SpeechError as e:
                 code, msg = e.code, e.message
             except Exception as e:                                # noqa: BLE001 - a broken voice must not leave Reo silent
@@ -863,7 +864,7 @@ class MockSpeaker:
     def readiness(self, voice_id):
         return {"ok": True}
 
-    def speak(self, text, voice_id=None, strict=False):
+    def speak(self, text, voice_id=None, strict=False, queue=False):
         self.spoken.append(text)
         self._cancel.clear()
 

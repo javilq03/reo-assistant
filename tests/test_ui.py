@@ -403,3 +403,19 @@ def test_read_aloud_toggle_is_for_normal_mode_and_persists(page):
     page.locator(".switch", has_text="Read replies aloud in normal mode").click()
     page.wait_for_timeout(300)
     assert page.bridge.get_settings()["speak_replies"] is True
+
+
+def test_normal_mode_reads_the_reply_while_it_streams_without_repeating_text(page):
+    page.bridge._settings.update({"speak_replies": True})
+    page.evaluate("document.querySelector('#trayLine') && 0")
+    page.reload(); page.wait_for_selector("#status:has-text('Ready')")
+    page.bridge._tts.spoken.clear()
+    page.fill("#input", "Tell me about the weather. Then about the sea. Then the sky.")
+    page.keyboard.press("Enter")
+    expect(page.locator(".msg.bot").last).not_to_be_empty(timeout=8000)
+    page.wait_for_timeout(800)
+    chunks = page.bridge._tts.spoken
+    assert len(chunks) >= 2 and chunks[0].startswith("You said:")           # spoken in pieces, the first one before the reply was finished
+    joined = "".join(chunks)
+    assert joined.count("Tell me about the weather") == 1 and joined.count("And **bold**") == 1   # nothing is read twice
+

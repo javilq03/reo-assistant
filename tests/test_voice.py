@@ -291,3 +291,16 @@ def test_piper_audio_gets_silence_around_it():
     out = tts._pad_silence(np.ones(1000, dtype=np.float32), 22050)
     assert len(out) == 1000 + int(22050 * 0.12) + int(22050 * 0.45)
     assert out[:10].sum() == 0 and out[-10:].sum() == 0 and out[int(22050 * 0.12) + 5] == 1
+
+
+def test_queued_sentences_do_not_interrupt_each_other(monkeypatch):
+    spoken, events = [], []
+    sp = tts.Speaker(lambda **ev: events.append(ev))
+    monkeypatch.setattr(tts, "piper_status", lambda refresh=False: (False, ""))
+    monkeypatch.setattr(sp._sapi, "available", lambda: True)
+    def slow(text, cancel, vid=None, vol=100):
+        time.sleep(0.15); spoken.append(text)
+    monkeypatch.setattr(sp._sapi, "speak", slow)
+    sp.speak("First sentence here.", queue=True); sp.speak("Second sentence here.", queue=True)
+    wait_done(events)
+    assert spoken == ["First sentence here.", "Second sentence here."]

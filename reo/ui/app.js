@@ -351,7 +351,7 @@ window.reoEvent = ev => {
     case 'delta': {
       const st = ensureStream(ev.conv);
       if (ev.kind === 'thought') { if (!st.thoughtStart) st.thoughtStart = Date.now(); st.thought += ev.text; }
-      else { if (st.thoughtStart && !st.thoughtEnd) st.thoughtEnd = Date.now(); st.text += ev.text; }
+      else { if (st.thoughtStart && !st.thoughtEnd) st.thoughtEnd = Date.now(); st.text += ev.text; speakStreamed(st, false); }
       schedulePaint(); updateUI();
       break;
     }
@@ -390,6 +390,24 @@ window.reoEvent = ev => {
   }
 };
 
+// Spoken replies start with the first finished sentence instead of waiting for the whole message.
+const speaksAloud = () => state.tts && (nativeOrb || orbMode || state.settings.speak_replies === true);
+function speakStreamed(st, final) {
+  if (!st || !speaksAloud()) return;
+  const done = st.spoken || 0, rest = st.text.slice(done);
+  let cut = rest.length;
+  if (!final) {
+    cut = 0;
+    for (const m of rest.matchAll(/[.!?\u2026]+["')\]]*(?:\s|$)|\n/g)) cut = m.index + m[0].length;
+    if (cut < (done ? 25 : 12) || (rest.slice(0, cut).match(/```/g) || []).length % 2) return;   // too short to be worth speaking yet, or inside a code block
+  }
+  const chunk = rest.slice(0, cut);
+  st.spoken = done + cut;
+  if (!chunk.trim()) return;
+  ttsBusy = true;
+  try { api().tts_speak(chunk, true); } catch (_) { ttsBusy = false; }
+}
+
 async function finishStream(ev, errorText) {
   const st = state.stream;
   state.stream = null;
@@ -415,7 +433,7 @@ async function finishStream(ev, errorText) {
   refreshActions(); updateUI();
   if (here) { if (nearBottom()) toBottom(); }
   if (orbMode && (reply || errorText)) showPopup(reply || errorText);
-  if (reply && state.tts && (nativeOrb || orbMode || state.settings.speak_replies === true)) { ttsBusy = true; try { api().tts_speak(reply); } catch (_) { ttsBusy = false; } }
+  speakStreamed(st, true);                                         // whatever is left of the reply (it was spoken sentence by sentence while it streamed)
   if (reply) { try { if (typeof window.onReplyShown === 'function') await window.onReplyShown(reply); } catch (_) {} }
   if (handsFree && !pending && !ttsBusy) handsFreeListen();
   else if (!handsFree && !orbMode) $input.focus();

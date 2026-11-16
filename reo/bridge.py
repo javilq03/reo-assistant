@@ -666,8 +666,8 @@ class Bridge:
         return {"ok": False, "command": ""}
 
     # ------------------------------------------------------------------ spoken replies
-    def tts_speak(self, text: str):
-        return self._tts.speak(text)
+    def tts_speak(self, text: str, queue: bool = False):
+        return self._tts.speak(text, queue=bool(queue))
 
     def tts_stop(self):
         self._tts.stop()
