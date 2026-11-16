@@ -289,3 +289,27 @@ def test_friendly_lines_are_short_and_honest():
     assert f({"do": "app.open", "name": "discord"}, "FAILED - no app called 'discord' was found. Nothing was launched. Tell the user you could not find it.").startswith("Could not open Discord")
     assert "could not confirm" in f({"do": "app.open", "name": "calculator"}, "NOT CONFIRMED - x")
     assert f({"do": "key", "keys": "win"}, "ok") == "" and f({"do": "app.close", "title": "notepad"}, "CLOSED - x") == "Closed Notepad"
+
+
+def test_kill_ends_every_process_of_the_program_and_verifies():
+    import types
+    class P:
+        def __init__(self, pid, name, alive): self.info = {"pid": pid, "name": name}; self.alive = alive
+        def terminate(self): self.alive[0].discard(self.info["pid"])
+        def kill(self): self.alive[0].discard(self.info["pid"])
+    alive = [{1, 2, 3, 4}]
+    procs = [P(1, "Discord.exe", alive), P(2, "Discord.exe", alive), P(3, "explorer.exe", alive), P(4, "notepad.exe", alive)]
+    ps = types.SimpleNamespace(process_iter=lambda attrs: [p for p in procs if p.info["pid"] in alive[0]])
+    r = C.kill_processes("discord", ps=ps, own_pid=999)
+    assert r.startswith("CLOSED") and "2 process" in r and alive[0] == {3, 4}              # explorer and notepad untouched
+    assert C.kill_processes("discord", ps=ps, own_pid=999).startswith("NOT OPEN")
+    assert C.kill_processes("explorer", ps=ps).startswith("FAILED") and C.kill_processes("a", ps=ps).startswith("FAILED")
+
+
+def test_chatty_reply_without_action_is_retried_once_instead_of_claiming_success(home, monkeypatch):
+    b, events, seen = _bridge(monkeypatch, ["It's open. Not confirmed yet.", '<action>{"do":"app.open","name":"steam"}</action>', "Done."])
+    b._computer.execute = lambda a: "OPENED - 'Steam' is now open on screen."
+    cid = _chat(b, events, "Open Steam", {"computerControl": True})
+    text = b._store.get(cid)["messages"][-1]["text"]
+    assert "*Result: Opened Steam*" in text and "It's open. Not confirmed" not in text
+    assert "NOTHING happened" in seen[1][0]

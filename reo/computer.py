@@ -31,7 +31,8 @@ SEMANTIC (prefer these):
 - {{"do":"app.open","name":"calculator"}}        // app name, .exe, or Start-menu name. The result tells you if a window really appeared
 - {{"do":"app.check","name":"calculator"}}       // is a window of that app open right now?
 - {{"do":"app.focus","title":"part of title"}}
-- {{"do":"app.close","title":"part of title"}}
+- {{"do":"app.close","title":"part of title"}}      // closes the window only; apps like Discord keep running in the tray
+- {{"do":"app.kill","name":"discord"}}              // ends all processes of the program: use for "kill", "quit", "exit", "close all its processes"
 - {{"do":"browser.goto","url":"https://..."}}
 - {{"do":"browser.search","query":"..."}}
 - {{"do":"shell.run","command":"dir","cwd":"C:\\\\"}}  // cwd optional; output is returned
@@ -104,12 +105,12 @@ def prompt(w: int, h: int) -> str:
 # contents never qualify. Conservative on purpose: if it misses, the user rephrases ("open ...") or starts with /pc.
 _ATTACH_RE = re.compile(r"\n*\[Attached file:[^\]]*\]\n~{3,}.*?\n~{3,}", re.S)
 _LEAD = (r"(?:please|pls|plz|por favor|porfa|can you|could you|would you|will you|can u|puedes|podr[ií]as|me puedes|me podr[ií]as|"
-         r"reo|hey|hi|hello|hola|oye|ok|okay|vale|now|ahora|then|luego|despu[eé]s|and|y|also|tambi[eé]n|just|ya|first|primero|"
+         r"reo|hey|hi|hello|hola|oye|ok|okay|vale|yes|yeah|yep|yup|sure|uhm+|um+|uh+|well|so|but|no|nope|alright|fine|right|come on|dale|s[ií]|bueno|pues|now|ahora|then|luego|despu[eé]s|and|y|also|tambi[eé]n|just|ya|first|primero|"
          r"go ahead and|i want you to|i need you to|i'd like you to|need you to|want you to|quiero que|necesito que|me gustar[ií]a que)")
 _START = rf"(?:^|[.!?¿¡;:,\n])\s*(?:{_LEAD}[,:]?\s+)*"
 _SITE = r"(?=[^.!?\n]{0,60}?(?:https?://|\b[\w-]+\.(?:com|org|net|es|io|tv|gg|app|dev|co|me|ai|edu|gov|info)\b))"
 _VERB = (
-    r"(?:open(?!\s*(?:source\b|up\b|ai\b|minded\b|-|world\b))|launch|click|double[- ]?click|right[- ]?click|minimi[sz]e|maximi[sz]e|"
+    r"(?:kill|quit|exit(?!\s+(?:code|status|strategy|plan|polls?|interview))|terminate|force[- ]?quit|mata|matar|open(?!\s*(?:source\b|up\b|ai\b|minded\b|-|world\b))|launch|click|double[- ]?click|right[- ]?click|minimi[sz]e|maximi[sz]e|"
     r"scroll|drag|close(?!\s+(?:to|by|enough|friends?|call|up|together)\b)|press|type(?!\s+of\b)|"
     r"(?:go to|navigate to|browse to)\s+(?:the\s+)?(?:site\s+|page\s+|website\s+)?" + _SITE + r"|"
     r"abre|abrir|[aá]breme|abrime|abras|lanza|lanzar|cierra|cerrar|cierres|minimiza|maximiza|haz\s+(?:un\s+|doble\s+)?(?:clic|click)|"
@@ -155,7 +156,7 @@ _PATH_VERB = re.compile(r"\b(?:read|lee|leer|write|escribe|open|abre|delete|borr
 # "try again", "it didn't work", "the calculator is not open": only counts right after Reo has just used the computer.
 _RETRY = re.compile(
     r"\b(?:again|retry|otra vez|de nuevo|nuevamente|int[eé]ntalo|didn'?t work|did not work|doesn'?t work|not working|never opened|didn'?t open|did not open|"
-    r"isn'?t open|is not open|not open|no funcion\w*|no (?:se )?(?:ha )?abri\w*|no abre|no est[aá] abiert\w*|sigue sin|still (?:not|nothing)|it comes off|try it)\b", re.I)
+    r"isn'?t open|is not open|not open|no funcion\w*|no (?:se )?(?:ha )?abri\w*|no abre|no est[aá] abiert\w*|sigue sin|still (?:not|nothing)|it comes off|try it|finish (?:the |that |it)|do it|go ahead|just do it|hazlo|h[aá]zlo ya)\b", re.I)
 
 
 def wants_control(text: str, prev_used: bool = False) -> bool:
@@ -194,6 +195,53 @@ def parse_actions(text: str) -> tuple[list[dict], str]:
         except ValueError:
             acts.append({"do": "_invalid", "raw": raw[:120]})
     return acts, _ACTION_RE.sub("", text or "").strip()
+
+
+_PROTECTED = {"system", "idle", "registry", "smss", "csrss", "wininit", "winlogon", "services", "lsass", "svchost", "explorer", "dwm",
+              "fontdrvhost", "python", "pythonw", "reo", "conhost", "taskmgr"}
+
+
+def kill_processes(name: str, ps=None, own_pid: int | None = None) -> str:
+    """End every process of a program (Discord keeps running in the tray after its window is closed). Windows-critical
+    processes and Reo itself are never touched. Result text is host-verified: it re-checks that they are gone."""
+    key = re.sub(r"\.(?:exe|bat|cmd|lnk)$", "", str(name or "").strip().strip("\"'"), flags=re.I).lower()
+    if len(key) < 3 or key in _PROTECTED:
+        return f"FAILED - '{name}' is not a program name I can end."
+    if ps is None:
+        import psutil as ps
+    own = own_pid if own_pid is not None else os.getpid()
+
+    def matching():
+        out = []
+        for p in ps.process_iter(["pid", "name"]):
+            try:
+                n = re.sub(r"\.exe$", "", (p.info.get("name") or ""), flags=re.I).lower()
+                if p.info.get("pid") != own and n not in _PROTECTED and (n == key or (len(key) >= 4 and key in n)):
+                    out.append(p)
+            except Exception:                                           # noqa: BLE001 - a process that vanished mid-scan
+                continue
+        return out
+    procs = matching()
+    if not procs:
+        return f"NOT OPEN - no running process matches '{name}'."
+    for p in procs:
+        try:
+            p.terminate()
+        except Exception:                                               # noqa: BLE001
+            pass
+    end = time.time() + 3
+    while time.time() < end and matching():
+        time.sleep(0.2)
+    for p in matching():
+        try:
+            p.kill()
+        except Exception:                                               # noqa: BLE001
+            pass
+    time.sleep(0.3)
+    left = matching()
+    if left:
+        return f"CLOSE NOT CONFIRMED - asked {len(procs)} process(es) of '{name}' to end but {len(left)} are still running (maybe they need administrator rights). Do not tell the user it is closed."
+    return f"CLOSED - ended {len(procs)} process(es) of '{name}'; none are running now."
 
 
 def _label(a: dict) -> str:
@@ -251,6 +299,8 @@ def describe(a: dict) -> str:
         return f"open app {a.get('name', '')}".strip()
     if d == "app.close":
         return f"close {a.get('title', '')}".strip()
+    if d == "app.kill":
+        return f"end {a.get('name', '')}".strip()
     if d == "app.check":
         return f"check {a.get('name', '')}".strip()
     if d == "browser.goto":
@@ -1032,6 +1082,8 @@ class WinComputer:
                 return self.focus(a.get("title", ""))
             if do == "app.close":
                 return self.close_window(a.get("title", ""))
+            if do == "app.kill":
+                return kill_processes(a.get("name") or a.get("title") or "")
             if do == "browser.goto":
                 url = str(a.get("url") or a.get("target") or "").strip()
                 if not url:

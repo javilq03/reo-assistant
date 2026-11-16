@@ -272,6 +272,8 @@ class Bridge:
                     break
             cc = cc_on and computer.wants_control(last_user, computer.used_computer(prev_bot))
             # The host's own "Computer:/Result:" lines are not part of what Reo said: showing them to him makes him imitate them as text.
+            if cc:
+                history = history[-7:]                      # long runs of earlier replies teach him to just chat; keep the recent context only
             history = [dict(m, text=(computer.strip_host_lines(m.get("text", ""))[0] or "(did something on the computer)"))
                        if m.get("role") == "bot" else m for m in history]
             comp = self._get_computer() if cc else None
@@ -346,6 +348,15 @@ class Bridge:
                         history = history + [{"role": "bot", "text": clean or "(no action)"}, {"role": "user", "text":
                             "[Host] Nothing was executed: you wrote status lines as plain text. Do not write Computer/Result lines yourself. "
                             "Emit the real <action>{...}</action> block now, then wait for the results."}]
+                        continue
+                    if comp is not None and not acts and steps == 0 and not retried and not self._stop.is_set():
+                        # The message asked for something on the computer but he only talked (often copying how earlier replies in
+                        # the chat looked). Nothing ran: ask once for the real action instead of letting a claim stand.
+                        retried = True
+                        history = history + [{"role": "bot", "text": "(no action)"}, {"role": "user", "text":
+                            "[Host] You did not emit an action, so NOTHING happened on the computer. Do not say anything is open, closed or done. "
+                            "Emit the <action>{...}</action> block for what the user asked, for example "
+                            "<action>{\"do\":\"app.open\",\"name\":\"steam\"}</action>, and nothing else."}]
                         continue
                     shown.append(clean)
                     if not acts or steps >= computer.MAX_STEPS or self._stop.is_set():
