@@ -299,7 +299,7 @@ DEFAULTS: dict = {
     "stt_model": "base",         # Whisper size: tiny | base | small | medium
     "stt_language": "auto",      # "auto" or a language code such as "en", "es"
     "wake_word": True,           # hands-free / orb: only answer after hearing "Reo", "Hey Reo", "Hello Reo"
-    "orb_speak": True,           # read replies aloud in orb mode
+    "speak_replies": False,      # read replies aloud in normal chat mode (orb mode always speaks)
     "orb_pos": [],               # [x, y] where the floating orb was last left
     "voice": "",
     "volume": 100,               # speech loudness, 0-100

@@ -415,7 +415,7 @@ async function finishStream(ev, errorText) {
   refreshActions(); updateUI();
   if (here) { if (nearBottom()) toBottom(); }
   if (orbMode && (reply || errorText)) showPopup(reply || errorText);
-  if (nativeOrb && reply && state.settings.orb_speak !== false && state.tts) { ttsBusy = true; try { api().tts_speak(reply); } catch (_) { ttsBusy = false; } }
+  if (reply && state.tts && (nativeOrb || orbMode || state.settings.speak_replies === true)) { ttsBusy = true; try { api().tts_speak(reply); } catch (_) { ttsBusy = false; } }
   if (reply) { try { if (typeof window.onReplyShown === 'function') await window.onReplyShown(reply); } catch (_) {} }
   if (handsFree && !pending && !ttsBusy) handsFreeListen();
   else if (!handsFree && !orbMode) $input.focus();
@@ -599,7 +599,7 @@ function handsFreeListen() {
         let r = { ok: true, command: final };
         try { r = await api().wake_check(final); } catch (_) {}
         final = r.ok ? r.command : '';
-        if (r.ok && !final) { if (orbMode) showPopup('Yes?'); else flash('Yes?'); if (nativeOrb && state.tts) { ttsBusy = true; try { api().tts_speak('Yes?'); } catch (_) { ttsBusy = false; } } }
+        if (r.ok && !final) { if (orbMode) showPopup('Yes?'); else flash('Yes?'); if ((nativeOrb || orbMode) && state.tts) { ttsBusy = true; try { api().tts_speak('Yes?'); } catch (_) { ttsBusy = false; } } }
         if (!handsFree) return;
       }
       if (final) send(final); else if (sttEngine() === pySTT) handsFreeListen(); else setTimeout(handsFreeListen, 350);
@@ -1234,7 +1234,7 @@ function speechCard() {
       h('div', { class: 'field' }, h('label', { text: 'Model' }), mk(STT_MODELS, s.stt_model || 'base', 'stt_model', 'Speech model')),
       h('div', { class: 'field' }, h('label', { text: 'Language' }), mk(STT_LANGS, s.stt_language || 'auto', 'stt_language', 'Speech language'))),
     toggleRow('wake_word', 'Only answer when I say "Reo" (hands-free and orb)', 'Say "Reo", "Hey Reo" or "Hello Reo", then your request. Saying only the name makes him listen for your next sentence.'),
-    toggleRow('orb_speak', 'Read replies aloud in orb mode', st2tts()),
+    toggleRow('speak_replies', 'Read replies aloud in normal mode', 'Orb mode always speaks, whatever this says. ' + st2tts()),
     h('div', { class: 'row' }, h('span', { class: 'muted', text: st.cached ? 'Model downloaded.' : `Downloads once (about ${st.download_mb || 145} MB) the first time you speak.` }),
       st.ok ? h('button', { class: 'btn sm', type: 'button', text: st.cached ? 'Load now' : 'Download now', onclick: () => api().stt_prepare() }) : null));
 }

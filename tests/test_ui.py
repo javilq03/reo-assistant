@@ -384,12 +384,22 @@ def test_switches_keep_their_state_when_settings_reopen(page):
             page.click("#trayLine")
         page.click("#menuBtn"); page.click("[data-panel=settings]")
     open_settings()
-    sw = page.locator(".switch", has_text="Read replies aloud")
+    sw = page.locator(".switch", has_text="Only answer when I say")
     assert sw.get_attribute("aria-checked") == "true"                       # default on is shown as on
     page.locator(".switch", has_text="Only answer when I say").click()
     page.wait_for_timeout(300)
     assert page.bridge.get_settings()["wake_word"] is False
     page.click("#panelClose")
     open_settings()
-    assert page.locator(".switch", has_text="Read replies aloud").get_attribute("aria-checked") == "true"
     assert page.locator(".switch", has_text="Only answer when I say").get_attribute("aria-checked") == "false"
+
+
+def test_read_aloud_toggle_is_for_normal_mode_and_persists(page):
+    if not page.locator("#menuBtn").is_visible():
+        page.click("#trayLine")
+    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    assert page.locator(".switch", has_text="Read replies aloud in normal mode").get_attribute("aria-checked") == "false"
+    assert page.locator(".switch", has_text="orb mode").count() == 0                  # no way to turn orb speech off
+    page.locator(".switch", has_text="Read replies aloud in normal mode").click()
+    page.wait_for_timeout(300)
+    assert page.bridge.get_settings()["speak_replies"] is True
