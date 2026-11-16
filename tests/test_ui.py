@@ -376,3 +376,20 @@ def test_menu_has_volume_slider_and_pronunciation_rules(page):
     expect(page.locator("#volumeOut")).to_have_text("40%")
     expect(page.locator("#pronRules")).to_be_visible()
     assert _inside(page, "#pronRules", ".menu-dialog") and _inside(page, "#volumeRange", ".menu-dialog")
+
+
+def test_switches_keep_their_state_when_settings_reopen(page):
+    def open_settings():
+        if not page.locator("#menuBtn").is_visible():
+            page.click("#trayLine")
+        page.click("#menuBtn"); page.click("[data-panel=settings]")
+    open_settings()
+    sw = page.locator(".switch", has_text="Read replies aloud")
+    assert sw.get_attribute("aria-checked") == "true"                       # default on is shown as on
+    page.locator(".switch", has_text="Only answer when I say").click()
+    page.wait_for_timeout(300)
+    assert page.bridge.get_settings()["wake_word"] is False
+    page.click("#panelClose")
+    open_settings()
+    assert page.locator(".switch", has_text="Read replies aloud").get_attribute("aria-checked") == "true"
+    assert page.locator(".switch", has_text="Only answer when I say").get_attribute("aria-checked") == "false"

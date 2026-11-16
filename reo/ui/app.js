@@ -1195,7 +1195,7 @@ function renderApiPanel() {
 }
 
 function toggleRow(key, label, sub) {
-  const sw = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': !!state.settings[key],
+  const sw = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': String(!!state.settings[key]),
     onclick: () => { const v = !state.settings[key]; sw.setAttribute('aria-checked', v); saveSetting({ [key]: v }, true); } },
     h('span', { class: 'track' }, h('span', { class: 'thumb' })), h('span', { text: label }));
   return h('div', { class: 'field' }, sw, sub ? h('div', { class: 'hint2', text: sub }) : null);
