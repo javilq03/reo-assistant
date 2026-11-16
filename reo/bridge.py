@@ -379,6 +379,10 @@ class Bridge:
                         self._emit(e="computing", conv=cid, on=True)
                     results, stopped = [], False
                     for act in acts[:computer.MAX_ACTIONS]:
+                        if opts.get("show_actions", s.get("show_actions")):
+                            line = "*Computer: " + computer.describe(act) + "*"
+                            self._emit(e="delta", conv=cid, kind="token", text="\n\n" + line + "\n\n")
+                            shown.append(line)
                         try:
                             res = comp.execute(act)
                         except computer.Stopped:

@@ -428,3 +428,13 @@ def test_computing_banner_shows_and_hides_with_events(page):
     expect(page.locator("#computing")).to_contain_text("Computing, press Esc to stop me")
     page.evaluate("window.reoEvent({e:'computing', on:false})")
     expect(page.locator("#computing")).to_be_hidden()
+
+
+def test_show_actions_toggle_in_settings(page):
+    if not page.locator("#menuBtn").is_visible():
+        page.click("#trayLine")
+    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    sw = page.locator(".switch", has_text="Show actions (debug)")
+    assert sw.get_attribute("aria-checked") == "false"
+    sw.click(); page.wait_for_timeout(300)
+    assert page.bridge.get_settings()["show_actions"] is True

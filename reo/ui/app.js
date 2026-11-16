@@ -1239,6 +1239,10 @@ function numberField(key, label, min, max, hint) {
 
 const STT_MODELS = [['tiny', 'Tiny - fastest, about 75 MB'], ['base', 'Base - balanced, about 145 MB'], ['small', 'Small - more accurate, about 480 MB'], ['medium', 'Medium - best, about 1.5 GB, slow on CPU']];
 const STT_LANGS = [['auto', 'Detect automatically'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['ja', 'Japanese'], ['zh', 'Chinese']];
+function computerCard() {
+  return h('div', { class: 'card' }, h('h3', { text: 'Computer Control' }),
+    toggleRow('show_actions', 'Show actions (debug)', 'Lists every action Reo runs in the chat, such as "Computer: open app Discord". Off by default: you only see short results like "Opened Discord".'));
+}
 function orbCard() {
   return h('div', { class: 'card' }, h('h3', { text: 'Orb' }),
     h('div', { class: 'hint2', text: 'The floating orb used by orb mode. The change applies right away, even while the orb is showing.' }),
@@ -1289,6 +1293,7 @@ function renderSettingsPanel() {
       toggleRow('autoload', 'Load the last model when Reo starts'),
       state.model.loaded ? h('div', {}, h('button', { class: 'btn sm primary', type: 'button', text: 'Reload model now', onclick: () => api().load_model(state.model.path) })) : null),
     speechCard(),
+    computerCard(),
     orbCard(),
     h('div', { class: 'card' }, h('h3', { text: 'Your data' }),
       h('div', { class: 'row' }, h('span', { class: 'muted', text: 'Conversations, models and settings are stored on this computer.' }),

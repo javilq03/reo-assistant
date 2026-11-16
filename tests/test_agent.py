@@ -330,3 +330,12 @@ def test_plain_text_result_lines_are_treated_as_fakes_and_used_computer_sees_fri
     assert C.strip_host_lines("Hi\nResult: app.kill, name: discord - FAILED. Reason: x\nBye")[0] == "Hi\n\nBye"
     assert C.used_computer("*Result: Opened Steam*") and not C.used_computer("just chatting")
     assert C.friendly({"do": "app.close", "title": "whatsapp"}, "FAILED - no window with 'whatsapp' in its title") == "Could not close Whatsapp: no window with 'whatsapp' in its title"
+
+
+def test_show_actions_debug_setting_lists_actions_only_when_on(home, monkeypatch):
+    for on in (False, True):
+        b, events, seen = _bridge(monkeypatch, ['<action>{"do":"app.open","name":"steam"}</action>', "ok"])
+        b._computer.execute = lambda a: "OPENED - 'Steam' is now open on screen."
+        cid = _chat(b, events, "open steam", {"computerControl": True, "show_actions": on})
+        text = b._store.get(cid)["messages"][-1]["text"]
+        assert ("*Computer: open app steam*" in text) is on and "*Result: Opened Steam*" in text

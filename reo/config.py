@@ -302,6 +302,7 @@ DEFAULTS: dict = {
     "speak_replies": False,      # read replies aloud in normal chat mode (orb mode always speaks)
     "orb_pos": [],               # [x, y] where the floating orb was last left
     "voice": "",
+    "show_actions": False,       # debug: show every action Reo runs ("Computer: open app Discord") in the chat
     "volume": 100,               # speech loudness, 0-100
     "pronunciations": "colega = co le ga",   # one "word = how to say it" per line; applied to spoken replies only
     "custom_models": [],         # [{id,name,path}] for GGUFs the user pointed at
