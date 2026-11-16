@@ -313,3 +313,20 @@ def test_chatty_reply_without_action_is_retried_once_instead_of_claiming_success
     text = b._store.get(cid)["messages"][-1]["text"]
     assert "*Result: Opened Steam*" in text and "It's open. Not confirmed" not in text
     assert "NOTHING happened" in seen[1][0]
+
+
+def test_text_before_an_action_is_never_shown_or_streamed(home, monkeypatch):
+    b, events, seen = _bridge(monkeypatch, ['Colega, done!\n\nResult: app.close, title: WhatsApp - FAILED\n<action>{"do":"app.close","title":"whatsapp"}</action>', "It is gone."])
+    b._computer.execute = lambda a: "CLOSED - 'WhatsApp' is gone."
+    cid = _chat(b, events, "close WhatsApp", {"computerControl": True})
+    text = b._store.get(cid)["messages"][-1]["text"]
+    streamed = "".join(e.get("text", "") for e in events if e.get("e") == "delta")
+    assert "Colega, done" not in text and "Colega, done" not in streamed and "FAILED" not in streamed
+    assert text.index("Closed Whatsapp") < text.index("It is gone.")
+    assert "Colega, done" not in seen[1][0]                                  # the model's pre-action claims are not fed back either
+
+
+def test_plain_text_result_lines_are_treated_as_fakes_and_used_computer_sees_friendly_lines():
+    assert C.strip_host_lines("Hi\nResult: app.kill, name: discord - FAILED. Reason: x\nBye")[0] == "Hi\n\nBye"
+    assert C.used_computer("*Result: Opened Steam*") and not C.used_computer("just chatting")
+    assert C.friendly({"do": "app.close", "title": "whatsapp"}, "FAILED - no window with 'whatsapp' in its title") == "Could not close Whatsapp: no window with 'whatsapp' in its title"

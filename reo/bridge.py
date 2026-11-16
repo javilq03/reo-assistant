@@ -292,13 +292,15 @@ class Bridge:
             if notice:
                 self._emit(e="notice", conv=cid, text=notice)
 
+            quiet = comp is not None        # with Computer Control the text is shown only after his actions were parsed and run
+
             def run(eng):
                 buf = {"token": "", "thought": ""}
                 last = time.time()
 
                 def flush():
                     nonlocal last
-                    for kind in ("thought", "token"):
+                    for kind in (("thought",) if quiet else ("thought", "token")):
                         if buf[kind]:
                             self._emit(e="delta", conv=cid, kind=kind, text=buf[kind])
                             buf[kind] = ""
@@ -358,7 +360,12 @@ class Bridge:
                             "Emit the <action>{...}</action> block for what the user asked, for example "
                             "<action>{\"do\":\"app.open\",\"name\":\"steam\"}</action>, and nothing else."}]
                         continue
-                    shown.append(clean)
+                    if not acts and clean:
+                        # Anything he wrote BEFORE running an action would be a claim about something that has not happened yet, so
+                        # text is only shown when no action follows (the answer after the results).
+                        if quiet:
+                            self._emit(e="delta", conv=cid, kind="token", text=("\n\n" if any(shown) else "") + clean)
+                        shown.append(clean)
                     if not acts or steps >= computer.MAX_STEPS or self._stop.is_set():
                         if cc and comp is not None and steps == 0 and not self._stop.is_set():
                             nrun = "*Result: no action was run for this message, so nothing was done on the computer.*"
@@ -388,7 +395,8 @@ class Bridge:
                         self._emit(e="delta", conv=cid, kind="token", text="\n\n" + msg)
                         shown.append(msg)
                         break
-                    history = history + [{"role": "bot", "text": step}, {"role": "user", "text": "[Computer results]\n" + "\n".join(results) + computer.RESULTS_TAIL}]
+                    history = history + [{"role": "bot", "text": "\n".join("<action>" + json.dumps(x, ensure_ascii=False) + "</action>" for x in acts[:computer.MAX_ACTIONS])},
+                                         {"role": "user", "text": "[Computer results]\n" + "\n".join(results) + computer.RESULTS_TAIL}]
                     parts_text = "\n\n"
                     self._emit(e="delta", conv=cid, kind="token", text=parts_text)
             finally:

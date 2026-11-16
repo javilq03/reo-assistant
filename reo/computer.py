@@ -76,7 +76,8 @@ RESULTS_TAIL = ("\n[Report these results truthfully. OPENED/CLOSED/FOCUSED/OPEN 
                 "FAILED, CLOSE NOT CONFIRMED and FOCUS NOT CONFIRMED are not. Never say something worked unless it is confirmed. Never invent errors or diagnostics: only report what is written above.]")
 
 # Lines the host writes into the chat. Reo must never write (or see) them: copied from the history they make him fake actions as plain text.
-_HOST_LINE_RE = re.compile(r"^[ \t]*\*(?:Computer|Result|Stopped)\b[^\n]*\*[ \t]*$", re.M | re.I)
+_HOST_LINE_RE = re.compile(r"^[ \t]*\*(?:Computer|Result|Stopped)\b[^\n]*\*[ \t]*$"
+                           r"|^[ \t.\u2026]*(?:Computer|Result)\s*:\s*(?:app\.|browser\.|file\.|shell\.|clipboard\.|open app|close |[A-Z]{3,}\b)[^\n]*$", re.M | re.I)
 _CALC_TAG_RE = re.compile(r"\[\s*CURRENCY CALCULATION[^\]]*\]", re.I)
 
 
@@ -88,7 +89,7 @@ def strip_host_lines(text: str) -> tuple[str, bool]:
 
 
 def used_computer(text: str) -> bool:
-    return bool(re.search(r"^[ \t]*\*Computer:", text or "", re.M))
+    return bool(re.search(r"^[ \t]*\*(?:Computer|Result):", text or "", re.M))
 
 
 _ACTION_RE = re.compile(r"<action>(.*?)</action>", re.S | re.I)
@@ -278,7 +279,8 @@ def friendly(a: dict, res: str) -> str:
         return f"Started {who}, but I could not confirm a window opened"
     if kind in ("CLOSE NOT CONFIRMED", "FOCUS NOT CONFIRMED"):
         return f"I could not confirm {who} " + ("closed" if kind.startswith("CLOSE") else "came to the front")
-    return "Could not open " + who + (": " + re.sub(r"\s*Nothing was launched.*$", "", rest)[:140] if rest else "")
+    verb = {"app.close": "close", "app.kill": "end", "app.focus": "bring to the front", "focus": "bring to the front"}.get(str(a.get("do", "")).lower(), "open")
+    return f"Could not {verb} " + who + (": " + re.sub(r"\s*(Nothing was launched|Tell the user).*$", "", rest)[:140] if rest else "")
 
 
 def describe(a: dict) -> str:
@@ -1081,7 +1083,7 @@ class WinComputer:
             if do == "app.focus":
                 return self.focus(a.get("title", ""))
             if do == "app.close":
-                return self.close_window(a.get("title", ""))
+                return self.close_window(a.get("title") or a.get("name") or "")
             if do == "app.kill":
                 return kill_processes(a.get("name") or a.get("title") or "")
             if do == "browser.goto":
