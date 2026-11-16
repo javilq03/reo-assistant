@@ -101,6 +101,14 @@ def apply_pronunciations(text: str, rules: str) -> str:
     return text
 
 
+def _pad_silence(audio, rate: int, lead: float = 0.12, tail: float = 0.45):
+    """Piper stops on the last sample and the output device closes the moment the buffer drains, which clips the final
+    syllable (worse on Bluetooth/USB devices that power down between sounds). Silence around the speech keeps the voice intact."""
+    import numpy as np
+    return np.concatenate([np.zeros(int(rate * lead), dtype=np.float32), np.asarray(audio, dtype=np.float32),
+                           np.zeros(int(rate * tail), dtype=np.float32)])
+
+
 def clamp_volume(v) -> int:
     try:
         return max(0, min(100, int(v)))
@@ -675,6 +683,7 @@ class _PiperBackend:
         if cancel.is_set() or audio is None or not len(audio):
             return
         audio = audio * (clamp_volume(volume) / 100.0)
+        audio = _pad_silence(audio, rate)
         sd.play(audio, rate)
         try:
             while sd.get_stream().active:

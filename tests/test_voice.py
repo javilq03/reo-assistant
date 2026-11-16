@@ -215,7 +215,7 @@ def test_piper_voice_plays_through_sounddevice(home, monkeypatch):
     sp = tts.Speaker(lambda **ev: events.append(ev))
     assert sp.readiness(KEY) == {"ok": True}
     sp.speak("hello there", voice_id=KEY, strict=True); wait_done(events)
-    assert played == [(3200, 16000)] and not any(e["kind"] in ("error", "notice") for e in events)
+    assert played == [(3200 + int(16000 * 0.12) + int(16000 * 0.45), 16000)] and not any(e["kind"] in ("error", "notice") for e in events)
     tts._piper_state.update(ok=None, error="")
 
 
@@ -284,3 +284,10 @@ def test_speaker_applies_rules_and_volume():
     sp._sapi = B()
     sp._speak_one("Hola colega", "system")
     assert got == {"text": "Hola co le ga", "vol": 30}
+
+
+def test_piper_audio_gets_silence_around_it():
+    import numpy as np
+    out = tts._pad_silence(np.ones(1000, dtype=np.float32), 22050)
+    assert len(out) == 1000 + int(22050 * 0.12) + int(22050 * 0.45)
+    assert out[:10].sum() == 0 and out[-10:].sum() == 0 and out[int(22050 * 0.12) + 5] == 1
