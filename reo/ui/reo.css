@@ -514,3 +514,10 @@ body.native-win .drawer, body.native-win .drawer-scrim { top: 34px; }
 .pron-in { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line, rgba(255,255,255,.12)); background: var(--surface-2); color: inherit; font: inherit; font-size: 13px; line-height: 1.45; }
 .voice-volume { flex: 1 1 0; min-width: 0; justify-content: flex-end; }
 .voice-volume input[type=range] { max-width: 220px; }
+
+.computing { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 16px 8px; padding: 7px 12px; border-radius: 999px; font-size: 13px; color: var(--gold); background: var(--gold-soft); border: 1px solid var(--gold); }
+.computing[hidden] { display: none; }
+.computing kbd { font: inherit; font-weight: 600; padding: 0 6px; border-radius: 5px; border: 1px solid var(--gold); }
+.computing .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); animation: computingPulse 1s ease-in-out infinite; }
+@keyframes computingPulse { 50% { opacity: .25; } }
+body.orb-mode .computing { display: none; }

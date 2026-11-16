@@ -419,3 +419,12 @@ def test_normal_mode_reads_the_reply_while_it_streams_without_repeating_text(pag
     joined = "".join(chunks)
     assert joined.count("Tell me about the weather") == 1 and joined.count("And **bold**") == 1   # nothing is read twice
 
+
+
+def test_computing_banner_shows_and_hides_with_events(page):
+    expect(page.locator("#computing")).to_be_hidden()
+    page.evaluate("window.reoEvent({e:'computing', on:true})")
+    expect(page.locator("#computing")).to_be_visible()
+    expect(page.locator("#computing")).to_contain_text("Computing, press Esc to stop me")
+    page.evaluate("window.reoEvent({e:'computing', on:false})")
+    expect(page.locator("#computing")).to_be_hidden()

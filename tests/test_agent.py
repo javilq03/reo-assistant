@@ -186,7 +186,7 @@ def test_explicit_request_runs_actions_and_shows_verified_status(home, monkeypat
     b._computer.execute = lambda a: "NOT CONFIRMED - 'calculator' was launched but no window for it appeared within 6s."
     cid = _chat(b, events, "open calculator", {"computerControl": True})
     text = b._store.get(cid)["messages"][-1]["text"]
-    assert "*Result: NOT CONFIRMED" in text                              # the truth is in the chat even if the model then says "It is open."
+    assert "*Result: Started Calculator, but I could not confirm a window opened*" in text and "*Computer:" not in text                              # the truth is in the chat even if the model then says "It is open."
     assert "[Computer results]" in seen[1][0] and "Never say something worked unless it is confirmed" in seen[1][0]
 
 
@@ -242,7 +242,7 @@ def test_every_action_shows_what_the_app_really_returned(home, monkeypatch):
     b, events, seen = _bridge(monkeypatch, ['<action>{"do":"app.open","name":"calculator"}</action>', "ok"])
     b._computer.execute = lambda a: "failed: weird internal thing"
     cid = _chat(b, events, "open calculator", {"computerControl": True})
-    assert "*Result: failed: weird internal thing*" in b._store.get(cid)["messages"][-1]["text"]
+    assert "*Result: Failed: weird internal thing*" in b._store.get(cid)["messages"][-1]["text"]
 
 
 def test_previous_default_prompt_is_upgraded(home):
@@ -281,3 +281,11 @@ def test_bare_json_actions_are_still_executed_and_removed_from_the_text():
 
 def test_try_opening_counts_as_a_request():
     assert C.wants_control("Okay, nothing works. Try opening Notepad just in case", True)
+
+
+def test_friendly_lines_are_short_and_honest():
+    f = C.friendly
+    assert f({"do": "app.open", "name": "discord.exe"}, "OPENED - 'Discord' is now open on screen.") == "Opened Discord"
+    assert f({"do": "app.open", "name": "discord"}, "FAILED - no app called 'discord' was found. Nothing was launched. Tell the user you could not find it.").startswith("Could not open Discord")
+    assert "could not confirm" in f({"do": "app.open", "name": "calculator"}, "NOT CONFIRMED - x")
+    assert f({"do": "key", "keys": "win"}, "ok") == "" and f({"do": "app.close", "title": "notepad"}, "CLOSED - x") == "Closed Notepad"

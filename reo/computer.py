@@ -196,6 +196,43 @@ def parse_actions(text: str) -> tuple[list[dict], str]:
     return acts, _ACTION_RE.sub("", text or "").strip()
 
 
+def _label(a: dict) -> str:
+    n = str(a.get("name") or a.get("title") or a.get("target") or a.get("path") or "").strip().strip("\"'")
+    n = re.sub(r"\.(?:exe|bat|cmd|lnk)$", "", n.rsplit("\\", 1)[-1], flags=re.I).strip()
+    return (n.title() if n.islower() else n) or "it"
+
+
+def friendly(a: dict, res: str) -> str:
+    """One short sentence for the chat ("Opened Discord"). '' for steps that went fine and need no comment.
+    Built from the host-verified result, so it is never more optimistic than the truth."""
+    r = str(res or "").strip()
+    first = r.splitlines()[0] if r else ""
+    who = _label(a)
+    m = re.match(r"^(OPENED|CLOSED|FOCUSED|OPEN|LAUNCHED|NOT CONFIRMED|NOT OPEN|FAILED|CLOSE NOT CONFIRMED|FOCUS NOT CONFIRMED)\b[\s:-]*(.*)", first)
+    if not m:
+        if re.match(r"^(failed|error|could not|cannot|no )", first, re.I):
+            return "Failed: " + re.sub(r"^(failed|error)[:\s-]*", "", first, flags=re.I)[:140]
+        return ""
+    kind, rest = m.groups()
+    if kind == "OPENED":
+        return f"{who} was already open" if "already" in rest else f"Opened {who}"
+    if kind == "OPEN":
+        return f"{who} is open"
+    if kind == "NOT OPEN":
+        return f"{who} is not open"
+    if kind == "CLOSED":
+        return f"Closed {who}"
+    if kind == "FOCUSED":
+        return f"Brought {who} to the front"
+    if kind == "LAUNCHED":
+        return f"Probably opened {who}, but I could not confirm it"
+    if kind == "NOT CONFIRMED":
+        return f"Started {who}, but I could not confirm a window opened"
+    if kind in ("CLOSE NOT CONFIRMED", "FOCUS NOT CONFIRMED"):
+        return f"I could not confirm {who} " + ("closed" if kind.startswith("CLOSE") else "came to the front")
+    return "Could not open " + who + (": " + re.sub(r"\s*Nothing was launched.*$", "", rest)[:140] if rest else "")
+
+
 def describe(a: dict) -> str:
     d = str(a.get("do", "?")).lower()
     if d in ("move", "click", "double_click", "right_click"):

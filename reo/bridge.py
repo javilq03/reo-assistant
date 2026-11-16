@@ -358,27 +358,22 @@ class Bridge:
                     if not active:
                         comp.begin()                          # gold cursor on, Esc watcher on
                         active = True
+                        self._emit(e="computing", conv=cid, on=True)
                     results, stopped = [], False
                     for act in acts[:computer.MAX_ACTIONS]:
-                        line = "*Computer: " + computer.describe(act) + "*"
-                        self._emit(e="delta", conv=cid, kind="token", text="\n\n" + line + "\n\n")
-                        shown.append(line)
                         try:
                             res = comp.execute(act)
                         except computer.Stopped:
                             stopped = True
                             break
                         results.append(f"{computer.describe(act)}: {res}")
-                        status = computer.status_line(res)
-                        if not status and str(act.get("do", "")).lower() not in ("file.read", "clipboard.get"):
-                            first = str(res).strip().splitlines()[0] if str(res).strip() else "(no output)"
-                            status = first[:180]                  # the app's raw answer, so a failure is never invisible
-                        if status:                                # the host-verified outcome, shown whatever Reo says afterwards
+                        status = computer.friendly(act, res)       # "Opened Discord": short, and never rosier than the host-verified result
+                        if status:
                             sline = "*Result: " + status + "*"
-                            self._emit(e="delta", conv=cid, kind="token", text=sline + "\n\n")
+                            self._emit(e="delta", conv=cid, kind="token", text="\n\n" + sline + "\n\n")
                             shown.append(sline)
                     if stopped or comp.aborted.is_set():
-                        msg = "*Stopped: Esc was pressed.*"
+                        msg = "*Stopped: you pressed Esc.*"
                         self._emit(e="delta", conv=cid, kind="token", text="\n\n" + msg)
                         shown.append(msg)
                         break
@@ -388,6 +383,7 @@ class Bridge:
             finally:
                 if active:
                     comp.end()
+                    self._emit(e="computing", conv=cid, on=False)
             text = "\n\n".join(x for x in shown if x).strip()
             if text or thought:
                 msg = self._store.add_message(cid, "bot", text, thought="".join(thought).strip(), stats=stats)

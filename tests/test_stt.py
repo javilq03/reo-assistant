@@ -382,7 +382,7 @@ def test_computer_control_loop_acts_then_answers(home, monkeypatch):
     assert end["e"] == "end"
     msgs = b._store.get(next(e for e in events if e.get("e") == "start")["conv"])["messages"]
     assert msgs[-1]["role"] == "bot" and "Done, Notepad is open." in msgs[-1]["text"] and "<action>" not in msgs[-1]["text"]
-    assert "*Computer: press win*" in msgs[-1]["text"]
+    assert "*Computer:" not in msgs[-1]["text"]                         # the step list is no longer shown
 
 
 def test_computer_control_off_ignores_actions(home, monkeypatch):

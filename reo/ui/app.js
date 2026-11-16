@@ -100,6 +100,7 @@ function blocks(text) {
 }
 
 function renderMarkdown(src) {
+  src = String(src).replace(/^\*Result: (.*)\*[ \t]*$/gm, '*$1*');          // host status lines read "Opened Discord", without the label
   const out = [], re = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
   let last = 0, m;
   while ((m = re.exec(src))) {
@@ -355,8 +356,9 @@ window.reoEvent = ev => {
       schedulePaint(); updateUI();
       break;
     }
-    case 'end': finishStream(ev); break;
-    case 'error': finishStream(ev, ev.message || 'Something went wrong'); break;
+    case 'computing': setComputing(ev.on); break;
+    case 'end': setComputing(false); finishStream(ev); break;
+    case 'error': setComputing(false); finishStream(ev, ev.message || 'Something went wrong'); break;
     case 'model': onModelEvent(ev); break;
     case 'download': onDownloadEvent(ev); break;
     case 'voicedl': onVoiceDl(ev); break;
@@ -389,6 +391,11 @@ window.reoEvent = ev => {
     case 'models': state.installed = ev.installed; if (state.panel === 'models') renderPanel(); break;
   }
 };
+
+function setComputing(on) {
+  $('computing').hidden = !on;
+  if (orbMode) { if (on) showPopup('Computing, press Esc to stop me'); }
+}
 
 // Spoken replies start with the first finished sentence instead of waiting for the whole message.
 const speaksAloud = () => state.tts && (nativeOrb || orbMode || state.settings.speak_replies === true);
