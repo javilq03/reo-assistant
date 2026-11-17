@@ -30,7 +30,7 @@ def detect(text: str) -> str | None:
 def of_conversation(user_messages: list[str]) -> str | None:
     """Language of the newest user message that has a clear one (a short "ok" or "Steam" keeps the previous language)."""
     for m in reversed(user_messages or []):
-        lang = detect((m or "")[:600])               # the typed text comes first; attached file contents follow
+        lang = detect((m or "").split("\n\n")[0][:300])               # the typed text comes first; attached file contents follow
         if lang:
             return lang
     return None
