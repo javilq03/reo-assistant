@@ -339,3 +339,12 @@ def test_show_actions_debug_setting_lists_actions_only_when_on(home, monkeypatch
         cid = _chat(b, events, "open steam", {"computerControl": True, "show_actions": on})
         text = b._store.get(cid)["messages"][-1]["text"]
         assert ("*Computer: open app steam*" in text) is on and "*Result: Opened Steam*" in text
+
+
+def test_system_prompt_names_the_language_of_the_latest_message(home, monkeypatch):
+    b, events, seen = _bridge(monkeypatch, ["Hola.", "Hi."])
+    _chat(b, events, "Hola colega, ¿qué tal estás hoy?", {})
+    assert "latest message is in Spanish" in seen[0][1]
+    b2, events2, seen2 = _bridge(monkeypatch, ["Hi."])
+    _chat(b2, events2, "How are you doing today?", {})
+    assert "latest message is in English" in seen2[0][1]

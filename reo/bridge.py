@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import computer, currency, hardware, models, wake
+from . import computer, lang, currency, hardware, models, wake
 from .config import Settings, app_dir, models_dir, voicebanks_dir
 from .engines.cloud import PRESETS, CloudEngine, CloudError
 from .engines.local import LocalEngine
@@ -286,6 +286,7 @@ class Bridge:
                                 [m.get("text", "") for m in history if m.get("role") == "user"])
             if cur:
                 sys_prompt = (sys_prompt or "") + "\n\n" + cur
+            sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
             params = {k: s.get(k) for k in PARAM_KEYS}
             deep = bool(opts.get("deepThinking", s.get("deepThinking")))
             self._emit(e="start", conv=cid, engine=engine.name)
