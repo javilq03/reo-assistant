@@ -364,3 +364,11 @@ def test_model_is_told_the_real_date_and_a_chosen_date_counts_as_now(home, monke
     b2.save_settings({"clock_mode": "manual", "clock_manual": "2030-01-05T10:00"})
     _chat(b2, events2, "What day is it?", {})
     assert "Saturday 5 January 2030" in seen2[0][1] and "set in Reo's settings" in seen2[0][1]
+
+
+def test_prompt_has_no_internet_rules_and_live_questions_get_a_note(home, monkeypatch):
+    from reo.config import DEFAULT_SYSTEM_PROMPT, _DEFAULT_V4, _LEGACY_SYSTEM_PROMPTS
+    assert "NO internet access" in DEFAULT_SYSTEM_PROMPT and _DEFAULT_V4 in _LEGACY_SYSTEM_PROMPTS and "NO internet access" not in _DEFAULT_V4
+    b, events, seen = _bridge(monkeypatch, ["I can't look that up."])
+    _chat(b, events, "Dime el último stream del canal DisxuNd", {})
+    assert "[NO LIVE DATA]" in seen[0][1]
