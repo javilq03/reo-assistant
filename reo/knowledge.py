@@ -30,14 +30,18 @@ def asks_for_source(text: str) -> bool:
     return bool(_SOURCE.search((text or "").split("\n\n")[0]))
 
 
-def note(text: str, computer_available: bool = False) -> str:
+def note(text: str, computer_available: bool = False, web_enabled: bool = False) -> str:
     """Per-message reminder; '' when the message does not ask for outside facts."""
+    if asks_for_source(text) and web_enabled:
+        return ("\n\n[HONESTY] The user is asking where your information comes from. The truth: you are a language model running on their computer. "
+                "You only have fresh information when a [WEB RESULTS] block is in these instructions, and the chat then shows a 'Searched the web' line. "
+                "Anything you said earlier in this chat without such a line was NOT looked up: say that plainly, briefly, and do not repeat those facts.")
     if asks_for_source(text):
         return ("\n\n[HONESTY] The user is asking where your information comes from. The truth: you are a language model running on their "
                 "computer with NO internet and no live sources. Everything you say comes from training, not from a lookup. Earlier answers in this "
                 "chat that sounded like a lookup (weather, channels, links, dates of streams) were NOT real: say that plainly, apologise briefly "
                 "in your own style, and do not repeat any of those facts.")
-    if needs_live_data(text):
+    if needs_live_data(text) and not web_enabled:
         how = ("If they want, offer to open the right page in their browser (they must ask you to operate the computer)."
                if computer_available else "Offer to work with text they paste in.")
         return ("\n\n[NO LIVE DATA] This message asks for something you cannot know: live or specific real-world facts (weather, news, "

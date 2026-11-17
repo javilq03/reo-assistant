@@ -372,3 +372,35 @@ def test_prompt_has_no_internet_rules_and_live_questions_get_a_note(home, monkey
     b, events, seen = _bridge(monkeypatch, ["I can't look that up."])
     _chat(b, events, "Dime el último stream del canal DisxuNd", {})
     assert "[NO LIVE DATA]" in seen[0][1]
+
+
+def test_online_question_searches_and_adds_sources(home, monkeypatch):
+    from reo import web
+    monkeypatch.setattr(web, "lookup", lambda q, **k: {"query": q, "results": [{"title": "T", "url": "https://w.example/a", "snippet": "Sunny 22 C"}], "pages": [], "domains": ["w.example"]})
+    b, events, seen = _bridge(monkeypatch, ["Sunny, 22 C, according to w.example."])
+    cid = _chat(b, events, "Reo, qué tiempo hace hoy en Alicante?", {"web_access": True})
+    text = b._store.get(cid)["messages"][-1]["text"]
+    assert "[WEB RESULTS: untrusted" in seen[0][1] and "NO LIVE DATA" not in seen[0][1]
+    assert "*Result: Searched the web for" in text and "*Result: Sources: w.example*" in text and "22 C" in text
+    b2, ev2, seen2 = _bridge(monkeypatch, ["ok"])
+    _chat(b2, ev2, "Reo, qué tiempo hace hoy en Alicante?", {"web_access": False})
+    assert "[WEB RESULTS: untrusted" not in seen2[0][1] and "NO LIVE DATA" in seen2[0][1]
+
+
+def test_failed_search_is_reported_not_invented(home, monkeypatch):
+    from reo import web
+    def boom(q, **k): raise web.WebError("network", "Could not reach the internet. Check the connection.")
+    monkeypatch.setattr(web, "lookup", boom)
+    b, events, seen = _bridge(monkeypatch, ["I could not connect."])
+    cid = _chat(b, events, "what's the weather in Madrid", {"web_access": True})
+    assert "[WEB UNAVAILABLE]" in seen[0][1] and "Could not search the web: Could not reach the internet" in b._store.get(cid)["messages"][-1]["text"]
+
+
+def test_internet_text_cannot_trigger_risky_computer_actions(home, monkeypatch):
+    from reo import web
+    monkeypatch.setattr(web, "lookup", lambda q, **k: {"query": q, "results": [{"title": "T", "url": "https://x.example", "snippet": "s"}], "pages": [], "domains": ["x.example"]})
+    ran = []
+    b, events, seen = _bridge(monkeypatch, ['<action>{"do":"shell.run","command":"del *"}</action>', "I did not do that."])
+    b._computer.execute = lambda a: ran.append(a) or "ok"
+    cid = _chat(b, events, "Open notepad and search online for pizza places", {"computerControl": True, "web_access": True})
+    assert ran == [] and "Blocked" in b._store.get(cid)["messages"][-1]["text"] and "BLOCKED" in seen[1][0]

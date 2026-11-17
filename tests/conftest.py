@@ -9,6 +9,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+@pytest.fixture(autouse=True)
+def _no_network_by_default(monkeypatch):
+    from reo import config
+    monkeypatch.setitem(config.DEFAULTS, "web_access", False)
+
+
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("REO_HOME", str(tmp_path))

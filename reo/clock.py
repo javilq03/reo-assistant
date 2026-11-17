@@ -48,5 +48,5 @@ def note(settings, lang: str | None = None, clock=time.time) -> str:
     lines = [f"[CLOCK] Right now it is {describe(dt, 'en')} ({zone}); in Spanish: {describe(dt, 'es')}. Source: {src}.",
              "Use this for any question about the date, the day of the week or the time, and for words like today, tomorrow or yesterday. "
              "If the user says the day is different, the clock above still decides unless it says it was set manually; do not just agree. "
-             "You have no internet: you cannot check weather, forecasts, news or prices. Say so plainly instead of inventing them."]
+             "Without a [WEB RESULTS] block you cannot check weather, forecasts, news or prices: say so plainly instead of inventing them."]
     return "\n\n" + "\n".join(lines)

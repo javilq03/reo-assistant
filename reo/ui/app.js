@@ -1249,7 +1249,8 @@ function generalCard() {
       state.settings.start_with_windows = snap.start_with_windows; renderPanel();
     }
   });
-  return h('div', { class: 'card' }, h('h3', { text: 'General' }), row, msg);
+  const net = toggleRow('web_access', 'Internet access', 'When a message asks for something online (weather, news, a channel, a search), Reo searches the web and reads the top pages. Anything from the internet is only information: it can never make Reo operate your computer. Only your own message can.');
+  return h('div', { class: 'card' }, h('h3', { text: 'General' }), net, row, msg);
 }
 function clockCard() {
   const manual = state.settings.clock_mode === 'manual';

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import clock, computer, knowledge, lang, startup, currency, hardware, models, wake
+from . import clock, computer, knowledge, web, lang, startup, currency, hardware, models, wake
 from .config import Settings, app_dir, models_dir, voicebanks_dir
 from .engines.cloud import PRESETS, CloudEngine, CloudError
 from .engines.local import LocalEngine
@@ -302,12 +302,36 @@ class Bridge:
             if cur:
                 sys_prompt = (sys_prompt or "") + "\n\n" + cur
             user_texts = [m.get("text", "") for m in history if m.get("role") == "user"]     # the chat's own user messages, before host notes are added
-            sys_prompt = (sys_prompt or "") + knowledge.note(last_user, bool(cc_on))
+            # Internet: only when this message asks for something online, only if the switch is on. The host searches, Reo just reads.
+            web_on = bool(opts.get("web_access", s.get("web_access")))
+            web_res, web_err, web_query, started = None, "", "", False
+            if web_on and web.wants_web(last_user):
+                web_query = web.query_from(last_user)
+                if len(web_query.split()) < 4:                           # a follow-up like "and tomorrow?": add the previous question
+                    earlier = [t for t in user_texts[:-1] if t.strip()]
+                    if earlier:
+                        web_query = (web.query_from(earlier[-1]) + " " + web_query).strip()[:200]
+                self._emit(e="start", conv=cid, engine=engine.name)
+                started = True
+                self._emit(e="notice", conv=cid, text="Searching the web…")
+                try:
+                    web_res = web.lookup(web_query)
+                    sys_prompt = (sys_prompt or "") + web.context_block(web_res)
+                except web.WebError as we:
+                    web_err = we.message
+                    sys_prompt = (sys_prompt or "") + ("\n\n[WEB UNAVAILABLE] The host tried to search the internet for this message and failed: " + we.message +
+                                                       " Say plainly that you could not reach the internet, give no facts you do not know, and do not guess.")
+                except Exception as we:                                  # noqa: BLE001 - a search must never break the chat
+                    log.exception("web lookup failed")
+                    web_err = f"{type(we).__name__}"
+                    sys_prompt = (sys_prompt or "") + "\n\n[WEB UNAVAILABLE] The internet lookup failed. Say you could not reach the internet and give no invented facts."
+            sys_prompt = (sys_prompt or "") + knowledge.note(last_user, bool(cc_on), web_on)
             sys_prompt = (sys_prompt or "") + clock.note(s, lang.of_conversation(user_texts))
             sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
             params = {k: s.get(k) for k in PARAM_KEYS}
             deep = bool(opts.get("deepThinking", s.get("deepThinking")))
-            self._emit(e="start", conv=cid, engine=engine.name)
+            if not started:
+                self._emit(e="start", conv=cid, engine=engine.name)
             if notice:
                 self._emit(e="notice", conv=cid, text=notice)
 
@@ -343,6 +367,11 @@ class Bridge:
             if cc and comp is None:
                 self._emit(e="notice", conv=cid, text="Computer Control needs Windows; Reo will answer without using it.")
             shown: list[str] = []
+            if web_res or web_err:
+                wline = ("*Result: Searched the web for \"" + web_query + "\"*") if web_res else ("*Result: Could not search the web: " + web_err + "*")
+                self._emit(e="delta", conv=cid, kind="token", text=wline + "\n\n")
+                shown.append(wline)
+            tainted = bool(web_res)                                       # text from the internet is in this turn's context
             steps, active, retried = 0, False, False
             try:
                 while True:
@@ -403,7 +432,7 @@ class Bridge:
                             self._emit(e="delta", conv=cid, kind="token", text="\n\n" + line + "\n\n")
                             shown.append(line)
                         try:
-                            res = comp.execute(act)
+                            res = (computer.taint_block(act) if tainted else "") or comp.execute(act)
                         except computer.Stopped:
                             stopped = True
                             break
@@ -426,6 +455,10 @@ class Bridge:
                 if active:
                     comp.end()
                     self._emit(e="computing", conv=cid, on=False)
+            if web_res and web_res.get("domains") and any(x for x in shown[1:]):
+                sline = "*Result: Sources: " + ", ".join(web_res["domains"]) + "*"
+                self._emit(e="delta", conv=cid, kind="token", text="\n\n" + sline)
+                shown.append(sline)
             text = "\n\n".join(x for x in shown if x).strip()
             if text or thought:
                 msg = self._store.add_message(cid, "bot", text, thought="".join(thought).strip(), stats=stats)

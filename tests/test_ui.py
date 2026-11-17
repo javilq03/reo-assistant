@@ -451,3 +451,13 @@ def test_clock_and_startup_cards_in_settings(page):
     assert page.bridge.get_settings()["clock_manual"] == "2031-03-04T12:30"
     expect(page.locator("#clockLive")).to_contain_text("Tuesday 4 March 2031")
     assert page.locator(".switch", has_text="Start Reo when Windows starts").count() == 1
+
+
+def test_internet_access_toggle_saves(page):
+    if not page.locator("#menuBtn").is_visible():
+        page.click("#trayLine")
+    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    sw = page.locator(".switch", has_text="Internet access")
+    assert sw.get_attribute("aria-checked") == "false"                       # tests switch it off; the product default is on (test_web)
+    sw.click(); page.wait_for_timeout(300)
+    assert page.bridge.get_settings()["web_access"] is True

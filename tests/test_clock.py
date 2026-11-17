@@ -9,7 +9,7 @@ def test_device_clock_and_spanish_names():
     assert src == "device" and clock.describe(dt, "en") == "Tuesday 17 November 2026, 09:46"
     assert clock.describe(dt, "es") == "martes 17 de noviembre de 2026, 09:46"
     n = clock.note({}, clock=lambda: t)
-    assert "Tuesday 17 November 2026, 09:46" in n and "martes 17 de noviembre" in n and "no internet" in n
+    assert "Tuesday 17 November 2026, 09:46" in n and "martes 17 de noviembre" in n and "WEB RESULTS" in n
 
 
 def test_manual_clock_keeps_counting_from_when_it_was_set():
