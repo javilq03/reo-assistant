@@ -521,3 +521,6 @@ body.native-win .drawer, body.native-win .drawer-scrim { top: 34px; }
 .computing .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); animation: computingPulse 1s ease-in-out infinite; }
 @keyframes computingPulse { 50% { opacity: .25; } }
 body.orb-mode .computing { display: none; }
+
+.row-gap { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+#clockManual { width: 100%; box-sizing: border-box; }

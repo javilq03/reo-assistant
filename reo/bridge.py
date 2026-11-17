@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import computer, lang, currency, hardware, models, wake
+from . import clock, computer, lang, startup, currency, hardware, models, wake
 from .config import Settings, app_dir, models_dir, voicebanks_dir
 from .engines.cloud import PRESETS, CloudEngine, CloudError
 from .engines.local import LocalEngine
@@ -123,8 +123,23 @@ class Bridge:
     def get_settings(self):
         return self._settings.snapshot()
 
+    def clock_now(self):
+        dt, source = clock.now(self._settings)
+        return {"text": clock.describe(dt, "es" if (self._settings.get("language") or "") == "es" else "en"), "source": source,
+                "iso": dt.strftime("%Y-%m-%dT%H:%M")}
+
     def save_settings(self, patch: dict):
-        snap = self._settings.update(patch or {})
+        patch = dict(patch or {})
+        if "clock_manual" in patch:
+            patch["clock_set_at"] = time.time()                    # the chosen time runs on from this moment
+        failed = ""
+        if "start_with_windows" in patch:
+            ok, failed = startup.set_enabled(bool(patch["start_with_windows"]))
+            if not ok:
+                patch["start_with_windows"] = startup.is_enabled()
+        snap = self._settings.update(patch)
+        if failed:
+            snap = dict(snap, startup_error=failed)
         if patch and "orb_size" in patch and self._native is not None:
             try:
                 self._native.set_size(self._orb_size())      # resize the orb while it is on screen
@@ -287,6 +302,7 @@ class Bridge:
             if cur:
                 sys_prompt = (sys_prompt or "") + "\n\n" + cur
             user_texts = [m.get("text", "") for m in history if m.get("role") == "user"]     # the chat's own user messages, before host notes are added
+            sys_prompt = (sys_prompt or "") + clock.note(s, lang.of_conversation(user_texts))
             sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
             params = {k: s.get(k) for k in PARAM_KEYS}
             deep = bool(opts.get("deepThinking", s.get("deepThinking")))

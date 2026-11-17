@@ -1239,6 +1239,41 @@ function numberField(key, label, min, max, hint) {
 
 const STT_MODELS = [['tiny', 'Tiny - fastest, about 75 MB'], ['base', 'Base - balanced, about 145 MB'], ['small', 'Small - more accurate, about 480 MB'], ['medium', 'Medium - best, about 1.5 GB, slow on CPU']];
 const STT_LANGS = [['auto', 'Detect automatically'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['ja', 'Japanese'], ['zh', 'Chinese']];
+function generalCard() {
+  const msg = h('div', { class: 'hint2' });
+  const row = toggleRow('start_with_windows', 'Start Reo when Windows starts', 'Reo opens by itself after you sign in. Turn it off to stop that.');
+  row.querySelector('.switch').addEventListener('click', async () => {
+    await new Promise(r => setTimeout(r, 250));
+    const snap = await api().get_settings();
+    if (snap && snap.start_with_windows !== !!state.settings.start_with_windows) {
+      state.settings.start_with_windows = snap.start_with_windows; renderPanel();
+    }
+  });
+  return h('div', { class: 'card' }, h('h3', { text: 'General' }), row, msg);
+}
+function clockCard() {
+  const manual = state.settings.clock_mode === 'manual';
+  const live = h('div', { class: 'hint2', id: 'clockLive', text: '' });
+  const refresh = async () => { try { const c = await api().clock_now(); live.textContent = 'Reo thinks it is: ' + c.text + (c.source === 'manual' ? ' (set by you)' : ' (this computer)'); return c; } catch (_) { return null; } };
+  const sel = h('select', { class: 'in', id: 'clockMode', 'aria-label': 'Where Reo gets the date and time' },
+    [['device', 'Read it from this computer (recommended)'], ['manual', 'Let me choose the date and time']].map(([v, t]) => h('option', { value: v, selected: v === (manual ? 'manual' : 'device'), text: t })));
+  sel.addEventListener('change', async () => { state.settings.clock_mode = sel.value; await api().save_settings({ clock_mode: sel.value }); renderPanel(); });
+  const kids = [h('h3', { text: 'Date and time' }), h('div', { class: 'field' }, h('label', { text: 'Source' }), sel)];
+  if (manual) {
+    const inp = h('input', { class: 'in', type: 'datetime-local', id: 'clockManual', value: state.settings.clock_manual || '', 'aria-label': 'Date and time' });
+    const apply = h('button', { class: 'btn', type: 'button', id: 'clockApply', text: 'Set' });
+    apply.addEventListener('click', async () => {
+      if (!inp.value) return;
+      state.settings.clock_manual = inp.value; await api().save_settings({ clock_manual: inp.value }); refresh();
+    });
+    const nowBtn = h('button', { class: 'btn', type: 'button', text: 'Use this computer\'s time now' });
+    nowBtn.addEventListener('click', async () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); inp.value = d.toISOString().slice(0, 16); });
+    kids.push(h('div', { class: 'field' }, inp, h('div', { class: 'row-gap' }, nowBtn, apply)));
+  }
+  kids.push(live);
+  refresh();
+  return h('div', { class: 'card' }, ...kids);
+}
 function computerCard() {
   return h('div', { class: 'card' }, h('h3', { text: 'Computer Control' }),
     toggleRow('show_actions', 'Show actions (debug)', 'Lists every action Reo runs in the chat, such as "Computer: open app Discord". Off by default: you only see short results like "Opened Discord".'));
@@ -1293,6 +1328,8 @@ function renderSettingsPanel() {
       toggleRow('autoload', 'Load the last model when Reo starts'),
       state.model.loaded ? h('div', {}, h('button', { class: 'btn sm primary', type: 'button', text: 'Reload model now', onclick: () => api().load_model(state.model.path) })) : null),
     speechCard(),
+    clockCard(),
+    generalCard(),
     computerCard(),
     orbCard(),
     h('div', { class: 'card' }, h('h3', { text: 'Your data' }),

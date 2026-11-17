@@ -302,6 +302,10 @@ DEFAULTS: dict = {
     "speak_replies": False,      # read replies aloud in normal chat mode (orb mode always speaks)
     "orb_pos": [],               # [x, y] where the floating orb was last left
     "voice": "",
+    "clock_mode": "device",      # "device": read this computer's clock on every message | "manual": the date and time chosen below
+    "clock_manual": "",          # "YYYY-MM-DDTHH:MM", keeps counting from clock_set_at
+    "clock_set_at": 0,
+    "start_with_windows": False,
     "show_actions": False,       # debug: show every action Reo runs ("Computer: open app Discord") in the chat
     "volume": 100,               # speech loudness, 0-100
     "pronunciations": "colega = co le ga",   # one "word = how to say it" per line; applied to spoken replies only

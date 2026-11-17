@@ -354,3 +354,13 @@ def test_model_sees_a_language_reminder_next_to_the_last_user_message(home, monk
     b, events, seen = _bridge(monkeypatch, ["Hola."])
     _chat(b, events, "Por qué me hablas en inglés", {})
     assert seen[0][0].endswith("[Responde en español.]")
+
+
+def test_model_is_told_the_real_date_and_a_chosen_date_counts_as_now(home, monkeypatch):
+    b, events, seen = _bridge(monkeypatch, ["Hi."])
+    _chat(b, events, "What day is it?", {})
+    assert "[CLOCK] Right now it is" in seen[0][1]
+    b2, events2, seen2 = _bridge(monkeypatch, ["Hi."])
+    b2.save_settings({"clock_mode": "manual", "clock_manual": "2030-01-05T10:00"})
+    _chat(b2, events2, "What day is it?", {})
+    assert "Saturday 5 January 2030" in seen2[0][1] and "set in Reo's settings" in seen2[0][1]

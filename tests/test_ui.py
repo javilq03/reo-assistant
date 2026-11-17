@@ -438,3 +438,16 @@ def test_show_actions_toggle_in_settings(page):
     assert sw.get_attribute("aria-checked") == "false"
     sw.click(); page.wait_for_timeout(300)
     assert page.bridge.get_settings()["show_actions"] is True
+
+
+def test_clock_and_startup_cards_in_settings(page):
+    if not page.locator("#menuBtn").is_visible():
+        page.click("#trayLine")
+    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    expect(page.locator("#clockLive")).to_contain_text("Reo thinks it is")
+    page.select_option("#clockMode", "manual")
+    page.fill("#clockManual", "2031-03-04T12:30"); page.click("#clockApply")
+    page.wait_for_timeout(300)
+    assert page.bridge.get_settings()["clock_manual"] == "2031-03-04T12:30"
+    expect(page.locator("#clockLive")).to_contain_text("Tuesday 4 March 2031")
+    assert page.locator(".switch", has_text="Start Reo when Windows starts").count() == 1
