@@ -348,3 +348,9 @@ def test_system_prompt_names_the_language_of_the_latest_message(home, monkeypatc
     b2, events2, seen2 = _bridge(monkeypatch, ["Hi."])
     _chat(b2, events2, "How are you doing today?", {})
     assert "latest message is in English" in seen2[0][1]
+
+
+def test_model_sees_a_language_reminder_next_to_the_last_user_message(home, monkeypatch):
+    b, events, seen = _bridge(monkeypatch, ["Hola."])
+    _chat(b, events, "Por qué me hablas en inglés", {})
+    assert seen[0][0].endswith("[Responde en español.]")

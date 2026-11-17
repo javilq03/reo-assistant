@@ -286,6 +286,7 @@ class Bridge:
                                 [m.get("text", "") for m in history if m.get("role") == "user"])
             if cur:
                 sys_prompt = (sys_prompt or "") + "\n\n" + cur
+            user_texts = [m.get("text", "") for m in history if m.get("role") == "user"]     # the chat's own user messages, before host notes are added
             sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
             params = {k: s.get(k) for k in PARAM_KEYS}
             deep = bool(opts.get("deepThinking", s.get("deepThinking")))
@@ -307,7 +308,7 @@ class Bridge:
                             buf[kind] = ""
                     last = time.time()
 
-                for ev in eng.stream(history, sys_prompt, params, deep, self._stop):
+                for ev in eng.stream(lang.tag_last_user(history, user_texts), sys_prompt, params, deep, self._stop):
                     t = ev["t"]
                     if t in ("token", "thought"):
                         (parts if t == "token" else thought).append(ev["text"])

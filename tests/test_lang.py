@@ -19,3 +19,10 @@ def test_latest_clear_message_decides_and_short_ones_keep_the_previous_language(
 
 def test_attached_text_does_not_change_the_language():
     assert lang.of_conversation(["Abre esto por favor\n\n" + "the quick brown fox and the dog " * 100]) == "es"
+
+
+def test_tag_adds_a_reminder_to_the_last_user_turn_only():
+    h = [{"role": "user", "text": "hello"}, {"role": "bot", "text": "hi"}, {"role": "user", "text": "No entiendo qué dices, háblame en español"}]
+    out = lang.tag_last_user(h, [m["text"] for m in h if m["role"] == "user"])
+    assert out[-1]["text"].endswith("[Responde en español.]") and out[0]["text"] == "hello" and h[-1]["text"].startswith("No entiendo") and "Responde" not in h[-1]["text"]
+    assert lang.tag_last_user(h, []) is h
