@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REQUIRED = {"webview": "pywebview>=5.3", "httpx": "httpx>=0.27", "psutil": "psutil>=5.9", "keyring": "keyring>=25",
             "PIL": "pillow>=10.1", "numpy": "numpy>=1.24"}
 OPTIONAL = {"pynvml": "nvidia-ml-py>=12", "sounddevice": "sounddevice>=0.4", "faster_whisper": "faster-whisper>=1.0",
-            "piper": "piper-tts>=1.3"}                       # offline neural voices
+            "piper": "piper-tts>=1.3", "pypdf": "pypdf>=4.0"}                       # offline neural voices
 LLAMA_DEPS = ["typing-extensions>=4.5.0", "numpy>=1.20.0", "diskcache>=5.6.1", "jinja2>=2.11.3"]
 WHEELS = "https://abetlen.github.io/llama-cpp-python/whl/"
 CUDA_PIP = ["nvidia-cuda-runtime-cu12", "nvidia-cublas-cu12"]     # the CUDA DLLs the GPU wheel needs

@@ -521,11 +521,24 @@ function startEdit(wrap) {
 // ------------------------------------------------------------------ attachments
 function renderFiles() {
   const box = $('files'); box.innerHTML = '';
-  state.files.forEach((f, i) => box.append(h('span', { class: 'file-chip' }, f.name,
+  state.files.forEach((f, i) => box.append(h('span', { class: 'file-chip' }, f.name + (f.pages ? ` (${f.pages} ${f.pages === 1 ? 'page' : 'pages'})` : ''),
     h('button', { type: 'button', title: 'Remove', 'aria-label': 'Remove ' + f.name, text: 'x', onclick: () => { state.files.splice(i, 1); renderFiles(); updateUI(); } }))));
 }
+const DOC_EXT = new Set(['pdf', 'docx', 'xlsx', 'pptx', 'odt', 'ods', 'odp', 'rtf', 'doc', 'xls', 'ppt']);
+const fileToBase64 = f => new Promise((ok, no) => { const r = new FileReader(); r.onerror = () => no(r.error); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.readAsDataURL(f); });
 async function addFiles(list) {
   for (const f of list) {
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (DOC_EXT.has(ext)) {                                  // documents are read by Python (PDF, Word, Excel, PowerPoint, ...)
+      if (f.size > 25 * 1024 * 1024) { toast(`${f.name} is larger than 25 MB`, true); continue; }
+      flash('Reading ' + f.name + '...');
+      let r;
+      try { r = await api().read_document(f.name, await fileToBase64(f)); } catch (e) { r = { ok: false, error: 'Could not read ' + f.name }; }
+      if (!r || !r.ok) { toast((r && r.error) || ('Could not read ' + f.name), true); continue; }
+      state.files.push({ name: f.name, text: r.text, pages: r.pages, truncated: r.truncated });
+      if (r.truncated) toast(`${f.name} is long: Reo received the first part only`);
+      continue;
+    }
     if (f.size > 200 * 1024) { toast(`${f.name} is larger than 200 KB`, true); continue; }
     const text = await f.text();
     if (text.includes('\u0000')) { toast(`${f.name} is not a text file`, true); continue; }

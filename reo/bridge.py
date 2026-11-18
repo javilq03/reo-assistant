@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import clock, computer, knowledge, web, lang, startup, currency, hardware, models, wake
+from . import clock, computer, docs, knowledge, web, lang, startup, currency, hardware, models, wake
 from .config import Settings, app_dir, models_dir, voicebanks_dir
 from .engines.cloud import PRESETS, CloudEngine, CloudError
 from .engines.local import LocalEngine
@@ -122,6 +122,20 @@ class Bridge:
     # ------------------------------------------------------------------ settings
     def get_settings(self):
         return self._settings.snapshot()
+
+    def read_document(self, name: str, b64: str):
+        """Text of an attached PDF / Word / Excel / PowerPoint / OpenDocument / RTF / text file (sent from the page as base64)."""
+        import base64
+        try:
+            data = base64.b64decode(b64 or "", validate=False)
+            budget = max(8000, min(60000, int(self._settings.get("n_ctx") or 8192) * 2))      # about half the context window, in characters
+            r = docs.extract(str(name or "file"), data, budget)
+            return {"ok": True, "name": name, **r}
+        except docs.DocError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:                                           # noqa: BLE001
+            log.exception("read_document failed")
+            return {"ok": False, "error": f"Could not read this file ({type(e).__name__})."}
 
     def clock_now(self):
         dt, source = clock.now(self._settings)
@@ -371,7 +385,7 @@ class Bridge:
                 wline = ("*Result: Searched the web for \"" + web_query + "\"*") if web_res else ("*Result: Could not search the web: " + web_err + "*")
                 self._emit(e="delta", conv=cid, kind="token", text=wline + "\n\n")
                 shown.append(wline)
-            tainted = bool(web_res)                                       # text from the internet is in this turn's context
+            tainted = bool(web_res) or "[Attached file:" in last_user      # text from the internet or from a file is in this turn's context: it may not drive the computer
             steps, active, retried = 0, False, False
             try:
                 while True:

@@ -461,3 +461,14 @@ def test_internet_access_toggle_saves(page):
     assert sw.get_attribute("aria-checked") == "false"                       # tests switch it off; the product default is on (test_web)
     sw.click(); page.wait_for_timeout(300)
     assert page.bridge.get_settings()["web_access"] is True
+
+
+def test_attaching_a_document_goes_through_python(page, tmp_path):
+    import base64, zipfile
+    f = tmp_path / "notes.docx"
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Quarterly plan</w:t></w:r></w:p></w:body></w:document>')
+    page.set_input_files("#fileInput", str(f))
+    expect(page.locator(".file-chip")).to_contain_text("notes.docx")
+    page.fill("#input", "summarize"); page.keyboard.press("Enter")
+    expect(page.locator(".msg.user .file-chip, .msg.user .attach, .msg.user").first).to_contain_text("notes.docx", timeout=8000)
