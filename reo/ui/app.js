@@ -529,7 +529,7 @@ const fileToBase64 = f => new Promise((ok, no) => { const r = new FileReader(); 
 async function addFiles(list) {
   for (const f of list) {
     const ext = (f.name.split('.').pop() || '').toLowerCase();
-    if (DOC_EXT.has(ext)) {                                  // documents are read by Python (PDF, Word, Excel, PowerPoint, ...)
+    if (DOC_EXT.has(ext) || f.size > 200 * 1024) {            // documents (and long text files) are read by Python, which cuts them to fit
       if (f.size > 25 * 1024 * 1024) { toast(`${f.name} is larger than 25 MB`, true); continue; }
       flash('Reading ' + f.name + '...');
       let r;
@@ -539,7 +539,6 @@ async function addFiles(list) {
       if (r.truncated) toast(`${f.name} is long: Reo received the first part only`);
       continue;
     }
-    if (f.size > 200 * 1024) { toast(`${f.name} is larger than 200 KB`, true); continue; }
     const text = await f.text();
     if (text.includes('\u0000')) { toast(`${f.name} is not a text file`, true); continue; }
     state.files.push({ name: f.name, text });

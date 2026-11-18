@@ -330,7 +330,8 @@ class Bridge:
                 self._emit(e="notice", conv=cid, text="Searching the web…")
                 try:
                     web_res = web.lookup(web_query)
-                    sys_prompt = (sys_prompt or "") + web.context_block(web_res)
+                    sys_prompt = (sys_prompt or "") + web.context_block(web_res, max(3000, int(s.get("n_ctx") or 8192)))        # ~1 character per context token
+                    log.info("web lookup %r: %d results, %d pages, %d chars of context", web_query, len(web_res["results"]), len(web_res["pages"]), len(sys_prompt))
                 except web.WebError as we:
                     web_err = we.message
                     sys_prompt = (sys_prompt or "") + ("\n\n[WEB UNAVAILABLE] The host tried to search the internet for this message and failed: " + we.message +
@@ -469,6 +470,11 @@ class Bridge:
                 if active:
                     comp.end()
                     self._emit(e="computing", conv=cid, on=False)
+            if web_res and not any(x for x in shown[1:]) and not self._stop.is_set():
+                log.warning("the model returned no text after a successful web search (prompt %d chars)", len(sys_prompt))
+                fb = web.fallback_answer(web_res, lang.of_conversation(user_texts))
+                self._emit(e="delta", conv=cid, kind="token", text=fb)
+                shown.append(fb)
             if web_res and web_res.get("domains") and any(x for x in shown[1:]):
                 sline = "*Result: Sources: " + ", ".join(web_res["domains"]) + "*"
                 self._emit(e="delta", conv=cid, kind="token", text="\n\n" + sline)

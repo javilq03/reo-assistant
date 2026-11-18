@@ -70,3 +70,9 @@ def test_taint_allows_only_harmless_actions():
 def test_internet_is_on_by_default_in_the_product():
     from reo import config
     assert config.DEFAULT_WEB_ACCESS is True
+
+
+def test_web_context_respects_its_budget():
+    big = {"query": "q", "results": [{"title": "t", "url": "https://a.example", "snippet": "s"}], "pages": [{"url": "https://a.example", "title": "A", "text": "x" * 3500}, {"url": "https://b.example", "title": "B", "text": "y" * 3500}], "domains": []}
+    assert len(web.context_block(big, 2500)) < 3000 and "END OF WEB RESULTS" in web.context_block(big, 2500)
+    assert "x" * 3500 in web.context_block(big, 20000)

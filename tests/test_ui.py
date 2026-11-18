@@ -472,3 +472,11 @@ def test_attaching_a_document_goes_through_python(page, tmp_path):
     expect(page.locator(".file-chip")).to_contain_text("notes.docx")
     page.fill("#input", "summarize"); page.keyboard.press("Enter")
     expect(page.locator(".msg.user .file-chip, .msg.user .attach, .msg.user").first).to_contain_text("notes.docx", timeout=8000)
+
+
+def test_files_over_200kb_are_accepted_and_cut_by_python(page, tmp_path):
+    f = tmp_path / "big.pdf.txt"
+    f.write_text("lorem ipsum dolor sit amet " * 20000, encoding="utf-8")        # about 540 KB
+    page.set_input_files("#fileInput", str(f))
+    expect(page.locator(".file-chip")).to_contain_text("big.pdf.txt")
+    expect(page.locator("#toasts, .toast").first).not_to_contain_text("larger than 200 KB")
