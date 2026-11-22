@@ -1,5 +1,6 @@
 """End-to-end UI tests: real Bridge + real page in headless Chromium, mock model."""
 import os
+import re
 
 import pytest
 from playwright.sync_api import sync_playwright, expect
@@ -188,12 +189,12 @@ def test_dictation_uses_builtin_stt(page):
 
 def test_hands_free_sends_spoken_phrase_and_stops(page):
     page.bridge._stt.script[:] = ["Hey Reo, hands free question"]
-    page.click("#mic")
+    page.click("#orbBtn")                             # orb mode is the way into hands-free
     expect(page.locator(".msg.user")).to_have_text("hands free question", timeout=8000)
-    expect(page.locator("#mic")).to_have_attribute("aria-pressed", "true")
     expect(page.locator(".msg-wrap.bot .msg.bot").last).to_contain_text("Reo", timeout=8000)
-    page.click("#mic")                                # turn hands-free off (cancels the pending listen)
-    expect(page.locator("#mic")).to_have_attribute("aria-pressed", "false")
+    page.click("#orbWrap")                            # mute: hands-free off (cancels the pending listen)
+    expect(page.locator("#orb")).to_have_attribute("data-state", "idle")
+    page.click("#orbExit")
     expect(page.locator("#status")).to_have_text("Ready", timeout=5000)
 
 
@@ -214,17 +215,17 @@ def test_orb_falls_back_in_browser(page):
     expect(page.locator("#orb")).to_have_attribute("data-state", "listening")
     page.click("#orbExit")
     expect(page.locator("body.orb-mode")).to_have_count(0)
-    expect(page.locator("#mic")).to_have_attribute("aria-pressed", "false")
+    expect(page.locator("#status")).to_have_text("Ready", timeout=5000)
 
 
 def test_orb_speaks_reply_and_resumes_listening(page):
     page.bridge._native_factory = None
     # in the browser the native orb is unavailable, so replies are not spoken; hands-free keeps listening
     page.bridge._stt.script[:] = ["Reo first question", "hello reo second question"]
-    page.click("#mic")
+    page.click("#orbBtn")
     expect(page.locator(".msg.user").first).to_have_text("first question", timeout=8000)
     expect(page.locator(".msg.user").nth(1)).to_have_text("second question", timeout=12000)
-    page.click("#mic")
+    page.click("#orbExit")
 
 
 def test_cloud_button_and_computer_control_switch(page):
@@ -241,6 +242,20 @@ def test_cloud_button_and_computer_control_switch(page):
     assert page.bridge._settings.get("computerControl") is True
 
 
+def test_gameplay_button_replaces_the_header_mic(page):
+    expect(page.locator("#mic")).to_have_count(0)                    # the voice-mode button is gone
+    expect(page.locator("#orbBtn")).to_be_visible()
+    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "false")
+    page.click("#gameBtn")
+    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#gameBtn")).to_have_class(re.compile("active"))
+    assert page.bridge._settings.get("gameplay") is True
+    expect(page.locator("#status")).to_contain_text("Gameplay")
+    page.click("#gameBtn")
+    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "false")
+    assert page.bridge._settings.get("gameplay") is False
+
+
 def test_orb_size_in_settings(page):
     page.click("#trayLine"); page.click("#menuBtn")
     page.click("[data-panel=settings]")
@@ -250,10 +265,10 @@ def test_orb_size_in_settings(page):
 
 def test_hands_free_ignores_speech_without_the_name(page):
     page.bridge._stt.script[:] = ["just talking to myself", "what a nice day", "Hey Reo what time is it"]
-    page.click("#mic")
+    page.click("#orbBtn")
     expect(page.locator(".msg.user")).to_have_text("what time is it", timeout=12000)
     assert page.locator(".msg.user").count() == 1          # the two sentences without his name were ignored
-    page.click("#mic")
+    page.click("#orbExit")
 
 
 # ---------------------------------------------------------------- voice download UI

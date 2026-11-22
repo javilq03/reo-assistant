@@ -132,7 +132,7 @@ function splitAttachments(text) {
 
 // ------------------------------------------------------------------ state
 const state = {
-  settings: { deepThinking: false, cloudModel: false, computerControl: false, orb_size: 150 }, presets: {}, installed: [], model: {}, cloudReady: false,
+  settings: { deepThinking: false, cloudModel: false, computerControl: false, gameplay: false, orb_size: 150 }, presets: {}, installed: [], model: {}, cloudReady: false,
   convs: [], cur: null, stt: { ok: false, reason: '' }, files: [], scan: null, downloads: {}, panel: null, welcome: false, stream: null,
 };
 window.reoSettings = state.settings;
@@ -141,7 +141,7 @@ let pending = false, dictating = false, handsFree = false, listening = false;
 let notice = '', noticeTimer = null, orbMode = false, orbPrevHF = false, popupTimer = null;
 let ttsBusy = false, micDeviceId = '', voiceId = '', nativeOrb = false, sttHandler = null, lastOrbState = '';
 
-const $messages = $('messages'), $input = $('input'), $send = $('send'), $mic = $('mic');
+const $messages = $('messages'), $input = $('input'), $send = $('send'), $game = $('gameBtn');
 
 function flash(msg) {
   notice = msg; updateUI();
@@ -172,9 +172,10 @@ function updateUI() {
   const label = { stop: 'Stop', rec: 'Stop and send', send: 'Send', mic: 'Dictate a message' }[mode];
   $send.title = label; $send.setAttribute('aria-label', label);
 
-  $mic.classList.toggle('active', handsFree);
-  $mic.setAttribute('aria-pressed', handsFree);
-  $mic.title = handsFree ? 'Stop hands-free' : 'Hands-free speech';
+  const gameOn = !!state.settings.gameplay;
+  $game.classList.toggle('active', gameOn);
+  $game.setAttribute('aria-pressed', gameOn);
+  $game.title = gameOn ? 'Gameplay is on: click to turn it off' : 'Gameplay: let Reo play a game for you';
 
   $('cloudBtn').setAttribute('aria-pressed', !!state.settings.cloudModel);
   const orbState = pending ? 'thinking' : handsFree ? 'listening' : 'idle';
@@ -188,7 +189,7 @@ function updateUI() {
     : pending ? (state.stream && state.stream.text ? 'Writing...' : state.stream && state.stream.thought ? 'Thinking...' : 'Thinking...')
     : handsFree ? 'Hands-free: listening'
     : state.model.loading ? 'Loading model...'
-    : ready ? 'Ready' : 'No model loaded');
+    : ready ? (gameOn ? 'Ready - gameplay on' : 'Ready') : 'No model loaded');
   const dot = $('dot');
   dot.className = 'dot' + (pending || state.model.loading ? ' busy' : !ready ? ' off' : '');
 
@@ -447,7 +448,7 @@ async function finishStream(ev, errorText) {
 }
 
 // ------------------------------------------------------------------ sending
-const chatOpts = () => ({ deepThinking: !!state.settings.deepThinking, cloudModel: !!state.settings.cloudModel, computerControl: !!state.settings.computerControl });
+const chatOpts = () => ({ deepThinking: !!state.settings.deepThinking, cloudModel: !!state.settings.cloudModel, computerControl: !!state.settings.computerControl, gameplay: !!state.settings.gameplay });
 
 function composeText(raw) {
   let t = raw.trim();
@@ -1367,7 +1368,11 @@ function wire() {
     const m = $send.dataset.mode;
     if (m === 'stop') api().stop(); else if (m === 'send') send(); else toggleDictation();
   });
-  $mic.addEventListener('click', () => handsFree ? stopHandsFree() : startHandsFree());
+  $game.addEventListener('click', () => {
+    const v = !state.settings.gameplay; saveSetting({ gameplay: v }, true);
+    flash(v ? 'Gameplay mode on' : 'Gameplay mode off');
+    if (typeof window.onGameplay === 'function') window.onGameplay(v);       // host hook: start/stop the game-playing loop
+  });
   window.addEventListener('resize', resize);
   $('orbBtn').addEventListener('click', () => setOrbMode(true));
   $('orbExit').addEventListener('click', () => setOrbMode(false));
