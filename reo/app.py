@@ -15,8 +15,9 @@ def _setup_logging():
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w"))
-    logging.basicConfig(filename=str(app_dir() / "reo.log"), level=logging.INFO, encoding="utf-8",
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from logging.handlers import RotatingFileHandler        # bounded like Capri's logs: 1 MB, one previous file
+    handler = RotatingFileHandler(str(app_dir() / "reo.log"), maxBytes=1024 * 1024, backupCount=1, encoding="utf-8")
+    logging.basicConfig(handlers=[handler], level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
 def _set_icons(window, *others, ico):

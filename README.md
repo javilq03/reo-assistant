@@ -85,3 +85,27 @@ Output: dist\Reo\Reo.exe
 `reo/currency.py` computes Arche/Lumus/Chronos/EUR conversions exactly and adds them to the system prompt for that message,
 so the model only relays the numbers. If you edit `DEFAULT_SYSTEM_PROMPT`, add the previous text to `_LEGACY_SYSTEM_PROMPTS`
 in `reo/config.py`, otherwise installs that saved the old default keep it.
+
+## Changes in this build (reo-app23)
+- Currency: "spend / left / minus / paid" messages are now a subtraction (first amount minus the rest, with "SHORT BY" when negative) instead of a sum; "in eur" without a plural is recognised.
+- Computer Control intent: "focus chrome", "list windows" / "lista las ventanas" and "move the mouse" / "mueve el ratón" now count as requests; "open question ..." no longer does.
+- UI: long conversations draw only the newest 200 messages, with a "Show earlier messages" button (a 3000-message chat opened in about 1 s with 44k DOM nodes before).
+- Tests: tests/test_release_fixes.py and a long-conversation UI test (232 passed, 1 skipped: the llama.cpp load test needs llama-cpp-python).
+
+## Capri features (v24)
+Settings now has: communication style, brief replies, reply language, custom wake phrase, follow-up listening (hidden ";listen" tag, 12 s window), wake acknowledgement (phrase, tone, own sound, silent), reminders and timers (also by voice or text, EN/ES), per-session permission switches for Computer Control (files and commands start off at every launch), bug report, context meter in the header, sleep/restart/quit, delete all conversations and a settings search box.
+Not ported: focus mode, update checker, animation features.
+
+## Orb extras (v25)
+Settings, Orb: Follow the mouse (the orb trails the cursor beside it; hold still over the orb to click it; dragging still works), Sleep look (dims and breathes after 90 s idle), Mood pulse (colour flash from the reply tone). The orb also has a "speaking" animation and draws a plain "R" if reo.png is missing. From source, double-click Reo.pyw to start without a console window (the built Reo.exe already has none).
+
+## v26: layout, logs, first run
+- Options bar (the line above the chat box): Deep thinking, Computer Control, Read aloud, Wake word only, communication Style, quick reminder, context meter.
+- Settings has its own gear button at the bottom of the conversations drawer (no longer in Menu or the Models tabs). Categories on the left: Chat, Model, Voice, Computer, Orb, General, App; search finds a setting in any category.
+- Diagnostics follow Capri's approach: logs/desktop-events.jsonl holds one JSON line per chat turn with timings and counters only (no messages, paths or keys), rotated at 512 KB; reo.log rotates at 1 MB. Bug reports include the last 40 timing lines.
+- First run: "Set up everything for me" downloads the recommended model, the speech model and an offline voice.
+- Context window default raised from 4096 to 8192 (once, for installs still on 4096): Reo's own instructions with Computer Control are about 3,000 tokens. A turn with no text after 30 s shows "Still working".
+
+## v27: managed server, timers
+- Settings > Model > Model runtime: "Managed llama-server" makes Reo download the official llama.cpp llama-server once (CPU, Vulkan or CUDA build chosen from your hardware, stored in Reo's folder), start it hidden on a free local port when a model loads and stop it on unload or quit. Restart Reo after changing it. Built in stays the default.
+- Reminders: Snooze 5 min on the reminder bar, Pause/Resume on pending timers, and a stopwatch (Settings > General, or say "start the stopwatch", "how long is the stopwatch at", "stop the stopwatch", "reset the stopwatch"; Spanish: "inicia el cronómetro", "cuánto lleva el cronómetro", "para el cronómetro").

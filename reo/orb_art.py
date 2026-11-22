@@ -47,6 +47,19 @@ def gold_gradient(w: int, h: int) -> Image.Image:
     return Image.fromarray(np.dstack([col, np.full((h, w), 255, "float32")]).astype("uint8"), "RGBA")
 
 
+def _fallback_mark(base: Image.Image) -> None:
+    """Procedural stand-in for the missing artwork: a dark "R" centred on the gold sphere."""
+    n = base.width
+    d = ImageDraw.Draw(base)
+    f = font(int(n * .5))
+    try:
+        box = d.textbbox((0, 0), "R", font=f)
+        w, h = box[2] - box[0], box[3] - box[1]
+        d.text(((n - w) / 2 - box[0], (n - h) / 2 - box[1]), "R", font=f, fill=(60, 44, 8, 255))
+    except Exception:                                   # noqa: BLE001
+        d.ellipse([n * .38, n * .38, n * .62, n * .62], fill=(60, 44, 8, 255))
+
+
 class OrbArt:
     def __init__(self, icon_path: str | Path, scale: float = 1.0):
         """scale: pixels per logical unit. The orb is DIAM units wide inside a LOGICAL-unit window; the window keeps the
@@ -76,7 +89,7 @@ class OrbArt:
             ic = ic.resize((k, k), Image.LANCZOS)
             base.alpha_composite(ic, ((n - k) // 2, (n - k) // 2))
         except OSError:
-            pass
+            _fallback_mark(base)                    # no reo.png: draw a plain "R" so the orb is never blank
         x, y = _grid(n)
         hl = np.clip(1 - np.hypot(x - .32, y - .22) / .38, 0, 1) * .5
         vg = np.clip((np.hypot(x - .5, y - .5) - .31) / .19, 0, 1) * .3
@@ -113,12 +126,19 @@ class OrbArt:
         return im.resize((n, n), Image.LANCZOS)
 
     # ---- one frame
-    def frame(self, state: str, level: float = 0.0, t: float = 0.0) -> Image.Image:
+    def frame(self, state: str, level: float = 0.0, t: float = 0.0, mood: str | None = None, mood_p: float = 0.0, sleep: float = 0.0) -> Image.Image:
+        """state: idle | listening | thinking | speaking. mood/mood_p: a colour pulse (mood_p goes 1 -> 0). sleep: 0 awake .. 1 asleep."""
         S, D = self.S, self.D
         level = max(0.0, min(1.0, level))
         img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        strength = {"idle": .16, "listening": .34 + .5 * level, "thinking": .32}.get(state, .16)
-        gold = Image.new("RGBA", (S, S), GOLD + (0,))
+        strength = {"idle": .16, "listening": .34 + .5 * level, "thinking": .32, "speaking": .4 + .5 * level}.get(state, .16)
+        strength *= 1 - .6 * sleep
+        glow_c = GOLD
+        if mood and mood_p > 0:
+            from .mood import COLORS
+            glow_c = tuple(int(a * (1 - mood_p) + b * mood_p) for a, b in zip(GOLD, COLORS.get(mood, GOLD)))
+            strength = min(1.0, strength + .5 * mood_p)
+        gold = Image.new("RGBA", (S, S), glow_c + (0,))
         gold.putalpha(self.glow.point(lambda v: int(v * min(1.0, strength))))
         img.alpha_composite(gold)
 
@@ -134,8 +154,21 @@ class OrbArt:
                 dr.ellipse([c - r, c - r, c + r, c + r], outline=(246, 220, 130, a), width=max(2, int(2 * self.scale * ss)))
             img.alpha_composite(layer.resize((S, S), Image.LANCZOS))
 
-        k = 1 + level * .06 + (.018 * math.sin(t * 2.4) if state == "listening" else 0)
-        art = self.orb_dim if state == "idle" else self.orb
+        if state == "speaking":                     # soft rings that follow the voice level
+            ss = 2
+            layer = Image.new("RGBA", (S * ss, S * ss), (0, 0, 0, 0))
+            dr = ImageDraw.Draw(layer)
+            for k_ in (0.0, .5):
+                p_ = (t * .9 + k_) % 1.0
+                r = D / 2 * (1 + (.10 + .22 * level) * p_) * ss
+                c = S * ss / 2
+                dr.ellipse([c - r, c - r, c + r, c + r], outline=(246, 220, 130, int(150 * (1 - p_))), width=max(2, int(2.5 * self.scale * ss)))
+            img.alpha_composite(layer.resize((S, S), Image.LANCZOS))
+
+        k = 1 + level * .06 + (.018 * math.sin(t * 2.4) if state in ("listening", "speaking") else 0)
+        if sleep:
+            k *= 1 - .05 * sleep + .012 * sleep * math.sin(t * 1.1)      # slow breathing while asleep
+        art = self.orb_dim if (state == "idle" or sleep > .5) else self.orb
         if abs(k - 1) > .002:
             sz = max(2, round(D * k))
             art = art.resize((sz, sz), Image.BILINEAR)
@@ -160,6 +193,9 @@ class OrbArt:
             bx = (S + D) // 2 - self._badge.width - int(D * .02)
             by = (S + D) // 2 - self._badge.height - int(D * .02)
             img.alpha_composite(self._badge, (bx, by))
+        if sleep > 0:
+            a = img.getchannel("A").point(lambda v: int(v * (1 - .5 * sleep)))
+            img.putalpha(a)
         return img
 
 

@@ -52,9 +52,20 @@
           <button class="switch" type="button" role="switch" aria-checked="false" data-key="computerControl" title="Allows Reo to operate your computer, but only when you ask him to in a message">
             <span class="track"><span class="thumb"></span></span><span>Computer Control</span>
           </button>
+          <button class="switch" type="button" role="switch" aria-checked="false" data-key="speak_replies" title="Read Reo's replies aloud in normal chat">
+            <span class="track"><span class="thumb"></span></span><span>Read aloud</span>
+          </button>
+          <button class="switch" type="button" role="switch" aria-checked="false" data-key="wake_word" title="Hands-free: only answer after hearing the name">
+            <span class="track"><span class="thumb"></span></span><span>Wake word only</span>
+          </button>
           <button class="menu-btn" id="menuBtn" type="button" aria-haspopup="dialog">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>Menu
           </button>
+        </div>
+        <div class="tray-row tray-extra">
+          <label class="tray-field">Style <select class="in" id="styleSel" aria-label="Communication style"></select></label>
+          <span class="tray-field quick-rem"><input class="in" id="qrText" type="text" maxlength="120" placeholder="Remind me to... (empty = timer)" aria-label="Quick reminder text"><input class="in" id="qrMins" type="number" min="1" max="43200" value="10" aria-label="Minutes"><span class="muted">min</span><button class="btn sm primary" id="qrAdd" type="button">Add</button></span>
+          <span class="ctx" id="ctxChip" hidden></span>
         </div>
       </div>
     </div>
@@ -77,11 +88,6 @@
         <div class="menu-row"><div class="menu-row-head">
           <span class="menu-label">API provider<span class="menu-sub" id="menuApiSub">Fallback not set up</span></span>
           <button type="button" class="menu-select" data-panel="api">Set up</button>
-        </div></div>
-        <div class="menu-sep"></div>
-        <div class="menu-row"><div class="menu-row-head">
-          <span class="menu-label">Settings<span class="menu-sub">Personality, generation, performance</span></span>
-          <button type="button" class="menu-select" data-panel="settings">Open</button>
         </div></div>
         <div class="menu-sep"></div>
         <div class="menu-row">
@@ -134,7 +140,7 @@
   </div>
 
   <div class="panel-overlay" id="panelOverlay" hidden>
-    <div class="menu-dialog wide" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
+    <div class="menu-dialog wide" id="panelDialog" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
       <div class="menu-head">
         <h2 id="panelTitle">Models</h2>
         <button class="icon-btn" id="panelClose" type="button" aria-label="Close">
@@ -144,7 +150,6 @@
       <div class="tabs" role="tablist" id="panelTabs">
         <button class="tab" role="tab" data-panel="models">Models</button>
         <button class="tab" role="tab" data-panel="api">API provider</button>
-        <button class="tab" role="tab" data-panel="settings">Settings</button>
       </div>
       <div class="panel-body" id="panelBody"></div>
     </div>
@@ -178,6 +183,12 @@
     <input class="in" id="search" type="search" placeholder="Search conversations" aria-label="Search conversations">
   </div>
   <div class="conv-list" id="convList"></div>
+  <div class="drawer-foot">
+    <button class="settings-btn" id="settingsBtn" type="button" data-panel="settings" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      <span>Settings</span>
+    </button>
+  </div>
 </aside>
 
 <div class="orb-view" id="orb" data-state="idle">

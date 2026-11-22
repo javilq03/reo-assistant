@@ -28,8 +28,8 @@ _UNIT_LOOSE = _UNIT + r"|arch|ark|arke|arc|lumos|lumous|kronos|chronus|cronus|co
 # The note is only added when the message actually asks for a conversion or a calculation.
 _ASK = re.compile(
     r"\b(?:how (?:much|many)|cu[aá]nt[oa]s?|convert\w*|convi[eé]rt\w*|conviert\w*|conversi[oó]n|pasa(?:r|me)?\s+(?:a|to)|equival\w*|equals?|worth|vale[ns]?|cuesta|cost|price|precio|total|sum|suma|"
-    r"split|desglos\w*|exact\w*|left|remain\w*|quedan?|sobran?|plus|minus|add|subtract|resta|money|dinero|euros?|in\s+(?:arche|lumus|chronos?|cronos?)|"
-    r"to\s+(?:arche|lumus|chronos?|cronos?)|en\s+(?:arche|lumus|chronos?|cronos?))\b|€",
+    r"split|desglos\w*|exact\w*|left|remain\w*|quedan?|sobran?|plus|minus|add|subtract|resta|money|dinero|euros?|in\s+(?:arche|lumus|chronos?|cronos?|eur)|"
+    r"to\s+(?:arche|lumus|chronos?|cronos?|eur)|en\s+(?:arche|lumus|chronos?|cronos?|eur))\b|€",
     re.I)
 
 
@@ -133,6 +133,11 @@ def parse(text: str, loose: bool = False) -> list[tuple[Fraction, str]]:
     return out[:8]
 
 
+# "I have 2 arche and spend 5 lumus, how many are left?" is a subtraction (first amount minus the rest), not a sum.
+_SUBTRACT = re.compile(r"\b(?:left|remain\w*|quedan?|sobran?|minus|menos|spen[dt]|gast\w+|subtract\w*|resta\w*|pay|paid|pag[oa]\w*|lose|lost|give|gave|sell|sold|vend\w+|buy|bought|compr\w+)\b", re.I)
+_ADDITIVE = re.compile(r"\b(?:plus|add|sum|suma\w*|total|together|junto\w*|altogether)\b", re.I)
+
+
 def note(text: str, history: list[str] | None = None, user_history: list[str] | None = None) -> str:
     """System-prompt addendum with the exact conversions for the amounts in `text`; '' if there are none.
     `history` is the recent conversation (oldest first, both sides): it tells us the chat is about the currency, which
@@ -163,7 +168,15 @@ def note(text: str, history: list[str] | None = None, user_history: list[str] | 
     if carried:
         lines.append("The user did not repeat the amount; it is the one from their earlier message:")
     lines += [f"- {equivalents(a, k)}" for a, k in found]
-    if len(found) > 1:
+    if len(found) > 1 and _SUBTRACT.search(text) and not _ADDITIVE.search(text):
+        first, rest = to_chronos(*found[0]), sum((to_chronos(a, k) for a, k in found[1:]), Fraction(0))
+        diff = first - rest
+        short = diff < 0
+        diff = abs(diff)
+        lines.append(f"- First amount minus the others: {'SHORT BY ' if short else ''}{fmt(diff)} Chronos = {fmt(diff / CHRONOS_PER_ARCHE)} Arche"
+                     f" = {fmt(diff / CHRONOS_PER_ARCHE * EUR_PER_ARCHE)} EUR  |  split: {breakdown(diff)}")
+        lines.append("This is a subtraction (what is left after spending/paying), not a sum. Use the line above as the answer.")
+    elif len(found) > 1:
         total = sum((to_chronos(a, k) for a, k in found), Fraction(0))
         lines.append(f"- If all the amounts above are added together: {fmt(total)} Chronos = {fmt(total / CHRONOS_PER_ARCHE)} Arche"
                      f" = {fmt(total / CHRONOS_PER_ARCHE * EUR_PER_ARCHE)} EUR  |  split: {breakdown(total)}")

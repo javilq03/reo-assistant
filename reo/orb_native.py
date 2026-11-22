@@ -131,6 +131,33 @@ def premultiplied_bgra(img) -> bytes:
     return out.tobytes()
 
 
+SLEEP_AFTER = 90.0       # seconds of nothing before the orb dims and breathes slowly
+MOOD_SECONDS = 2.0       # length of a mood colour pulse
+
+
+def follow_target(cx, cy, size, scale, work):
+    """Where the orb's top-left should be for a cursor at (cx, cy): beside it (down and right, flipping near the screen edge)."""
+    sx, sy, sw, sh = work
+    gap = 36 * scale
+    x, y = cx + gap, cy + gap
+    if x + size > sx + sw:
+        x = cx - gap - size
+    if y + size > sy + sh:
+        y = cy - gap - size
+    return max(sx, min(x, sx + sw - size)), max(sy, min(y, sy + sh - size))
+
+
+def follow_step(pos, target, k=0.16):
+    """One easing step from pos toward target (whole pixels; stops when close)."""
+    dx, dy = target[0] - pos[0], target[1] - pos[1]
+    if abs(dx) < 2 and abs(dy) < 2:
+        return pos
+    def step(d):
+        v = d * k
+        return int(v) if abs(v) >= 1 else (1 if d > 0 else -1)
+    return pos[0] + step(dx), pos[1] + step(dy)
+
+
 class LayeredWindow:
     """One layered popup on its own thread. Handlers: on_click, on_double, on_moved (all optional, called on that thread)."""
 
@@ -302,6 +329,10 @@ class NativeOrb:
         self.on_bubble_hidden = on_bubble_hidden
         self.win = LayeredWindow(draggable=True, delay_click=True, on_click=self._clicked, on_double=self._double, on_moved=self._moved)
         self.state, self.level = "idle", 0.0
+        self.follow, self.allow_sleep, self.allow_mood = False, True, True
+        self._active = time.time()          # last moment something happened (for the sleep look)
+        self._sleep = 0.0                   # 0 awake .. 1 asleep (eased)
+        self._mood, self._mood_t = None, 0.0
         self._t0 = time.time()
         self._off = (0, 0)                  # where the orb sits inside the window
         self._canvas = (self.art.S, self.art.S)
@@ -333,6 +364,7 @@ class NativeOrb:
         return bool(b) and b[1] <= x < b[1] + b[0].width and b[2] <= y < b[2] + b[0].height
 
     def _clicked(self, x=0, y=0):
+        self.wake()
         if self._in_bubble(x, y):
             self.hide_bubble()                                   # a click on the bubble dismisses it
         elif self._on_click:
@@ -361,8 +393,26 @@ class NativeOrb:
         self.hide_bubble()
         self.win.hide()
 
+    def configure(self, follow=None, sleep=None, mood=None):
+        if follow is not None:
+            self.follow = bool(follow)
+        if sleep is not None:
+            self.allow_sleep = bool(sleep)
+        if mood is not None:
+            self.allow_mood = bool(mood)
+        self.wake()
+
+    def wake(self):
+        self._active = time.time()
+
+    def set_mood(self, mood):
+        if mood and self.allow_mood:
+            self._mood, self._mood_t = mood, time.time()
+            self.wake()
+
     def set_state(self, state):
-        self.state = state if state in ("idle", "listening", "thinking") else "idle"
+        self.state = state if state in ("idle", "listening", "thinking", "speaking") else "idle"
+        self.wake()
 
     def set_level(self, v):
         self.level = max(0.0, min(1.0, float(v)))
@@ -387,11 +437,13 @@ class NativeOrb:
     def _draw(self, force=False, pos=None):
         with self._lock:
             t = time.time() - self._t0
-            key = (self.state, round(self.level, 2), round(t * 30) if self.state != "idle" else 0)
+            mp = max(0.0, 1 - (time.time() - self._mood_t) / MOOD_SECONDS) if self._mood else 0.0
+            animated = self.state != "idle" or self._sleep > 0 or mp > 0
+            key = (self.state, round(self.level, 2), round(t * 30) if animated else 0, round(self._sleep, 2), round(mp, 2))
             if not force and key == self._last:
                 return
             self._last = key
-            frame = self.art.frame(self.state, self.level, t)
+            frame = self.art.frame(self.state, self.level, t, self._mood, mp, self._sleep)
             if self._bubble is None and self._canvas == frame.size:
                 img = frame
             else:
@@ -404,14 +456,47 @@ class NativeOrb:
             else:
                 self.win.set_image(img, pos[0], pos[1])
 
+    def _cursor(self):
+        pt = wintypes.POINT()
+        _u.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
+
+    def _tick_follow(self):
+        """Trail the cursor with a lag, keeping beside it. Holds still while dragged, while a bubble is open and while the
+        cursor is over the orb (so it can still be clicked)."""
+        if not self.follow or self.win._dragging or self._bubble is not None:
+            return
+        cx, cy = self._cursor()
+        x, y = self.position()
+        S = self.art.S
+        if x <= cx <= x + S and y <= cy <= y + S:
+            self.wake()
+            return
+        sx, sy, sw, sh = self.screen()
+        nx, ny = follow_target(cx, cy, S, self._dpi_scale, (sx, sy, sw, sh))
+        mx, my = follow_step((x, y), (nx, ny))
+        if (mx, my) != (x, y):
+            self.win.move(mx - self._off[0], my - self._off[1])
+
+    def _tick_sleep(self):
+        want = 0.0
+        if self.allow_sleep and self.state == "idle" and self._bubble is None and time.time() - self._active > SLEEP_AFTER:
+            want = 1.0
+        self._sleep += (want - self._sleep) * (0.08 if want else 0.35)
+        if abs(self._sleep - want) < .01:
+            self._sleep = want
+
     def _loop(self):
         while self._run:
             try:
                 if self.win.visible:
+                    self._tick_follow()
+                    self._tick_sleep()
                     self._draw()
             except Exception:
                 log.debug("orb draw failed", exc_info=True)
-            time.sleep(1 / 30 if self.state != "idle" else 0.1)
+            busy = self.state != "idle" or self.follow or self._sleep > 0 or (self._mood and time.time() - self._mood_t < MOOD_SECONDS)
+            time.sleep(1 / 30 if busy else 0.1)
 
     # bubble (same window)
     def _layout(self, img, tail_y):
@@ -420,6 +505,7 @@ class NativeOrb:
                                       reach=self.art.D / 2 + 6 * self._dpi_scale)
 
     def show_bubble(self, text, timeout=None):
+        self.wake()
         with self._lock:
             img, tail_y = orb_art.render_bubble(text, "right", self._dpi_scale)
             side, canvas, off, boff, origin = self._layout(img, tail_y)

@@ -177,7 +177,8 @@ function updateUI() {
   $mic.title = handsFree ? 'Stop hands-free' : 'Hands-free speech';
 
   $('cloudBtn').setAttribute('aria-pressed', !!state.settings.cloudModel);
-  const orbState = pending ? 'thinking' : handsFree ? 'listening' : 'idle';
+  document.querySelectorAll('.tray .switch[data-key]').forEach(sw => sw.setAttribute('aria-checked', !!state.settings[sw.dataset.key]));
+  const orbState = pending ? 'thinking' : (ttsBusy && (orbMode || nativeOrb)) ? 'speaking' : handsFree ? 'listening' : 'idle';
   $('orb').dataset.state = orbState;
   if (nativeOrb && orbState !== lastOrbState) { lastOrbState = orbState; try { api().orb_state(orbState); } catch (_) {} }
   $('orbBtn').setAttribute('aria-pressed', orbMode);
@@ -305,11 +306,21 @@ function refreshActions() {
   });
 }
 
-function renderConversation() {
+// Long chats: only the newest messages are drawn (3000 messages took about 1 s and 44k DOM nodes); older ones load on demand.
+const RENDER_WINDOW = 200;
+let shownFrom = null;                      // null = newest RENDER_WINDOW messages; a number = draw from that index
+function renderConversation(from) {
   $messages.innerHTML = '';
   const g = h('div', { class: 'msg-wrap bot' }, h('div', { class: 'msg bot' }, h('div', { class: 'md' }, h('p', { text: GREETING }))));
   $messages.append(g);
-  for (const m of state.cur.messages) m.role === 'user' ? addUserMsg(m) : addBotMsg(m);
+  const msgs = state.cur.messages;
+  if (typeof from === 'number') shownFrom = from; else if (shownFrom === null || shownFrom > msgs.length) shownFrom = null;
+  const start = shownFrom === null ? Math.max(0, msgs.length - RENDER_WINDOW) : Math.min(shownFrom, Math.max(0, msgs.length - RENDER_WINDOW));
+  if (start > 0) {
+    $messages.append(h('button', { class: 'btn sm show-earlier', type: 'button', text: `Show earlier messages (${start} hidden)`,
+      onclick: () => { const y = $messages.scrollHeight; renderConversation(Math.max(0, start - RENDER_WINDOW)); $messages.scrollTop = $messages.scrollHeight - y; } }));
+  }
+  for (const m of msgs.slice(start)) m.role === 'user' ? addUserMsg(m) : addBotMsg(m);
   if (state.stream && state.stream.conv === state.cur.id) attachStream();
   refreshActions(); toBottom();
 }
@@ -326,7 +337,7 @@ function paintStream() {
   if (!st || !st.ui) return;
   const secs = st.thoughtEnd ? Math.max(1, Math.round((st.thoughtEnd - st.thoughtStart) / 1000)) : 0;
   const keep = nearBottom();
-  st.ui.set(st.text, st.thought, true, secs);
+  st.ui.set(stripListen(st.text), st.thought, true, secs);
   if (keep) toBottom();
 }
 function ensureStream(conv) {
@@ -341,6 +352,11 @@ function schedulePaint() {
   if (!st || st.raf) return;
   st.raf = requestAnimationFrame(() => { st.raf = 0; paintStream(); });
 }
+
+// A reply that expects an answer ends in the hidden tag ;listen (the host keeps the microphone open). Never show or speak it,
+// not even its first letters while the reply is still streaming.
+const LISTEN_TAIL = /\s*;(?:l(?:i(?:s(?:t(?:e(?:n)?)?)?)?)?)?\s*$/i;
+const stripListen = t => (t || '').replace(/\s*;listen\s*$/i, '').replace(/\s*;l(?:i(?:s(?:t(?:e)?)?)?)?$/i, '');
 
 window.reoEvent = ev => {
   switch (ev.e) {
@@ -365,9 +381,9 @@ window.reoEvent = ev => {
     case 'toast': toast(ev.text, !!ev.bad, 6000); break;
     case 'stt': onSttEvent(ev); break;
     case 'tts':
-      if (ev.kind === 'start') ttsBusy = true;
+      if (ev.kind === 'start') { ttsBusy = true; updateUI(); }
       else if (ev.kind === 'done') {
-        ttsBusy = false;
+        ttsBusy = false; updateUI();
         const pb = $('voicePreview'); if (pb) pb.disabled = false;
         if (handsFree && !pending && !listening) handsFreeListen();
       }
@@ -389,6 +405,10 @@ window.reoEvent = ev => {
       else if (ev.kind === 'exit') setOrbMode(false, true);
       break;
     case 'models': state.installed = ev.installed; if (state.panel === 'models') renderPanel(); break;
+    case 'reminders': if (state.panel === 'settings') refreshReminders(); break;
+    case 'serverdl': if (window.__serverUi) window.__serverUi(ev); break;
+    case 'stopwatch': if (state.panel === 'settings') refreshStopwatch(ev); break;
+    case 'reminder': onReminder(ev); break;
   }
 };
 
@@ -401,7 +421,7 @@ function setComputing(on) {
 const speaksAloud = () => state.tts && (nativeOrb || orbMode || state.settings.speak_replies === true);
 function speakStreamed(st, final) {
   if (!st || !speaksAloud()) return;
-  const done = st.spoken || 0, rest = st.text.slice(done);
+  const done = st.spoken || 0, rest = stripListen(st.text).slice(done);
   let cut = rest.length;
   if (!final) {
     cut = 0;
@@ -421,11 +441,11 @@ async function finishStream(ev, errorText) {
   if (st && st.raf) cancelAnimationFrame(st.raf);
   if (ev.conversations) { state.convs = ev.conversations; renderList(); }
   const here = state.cur && ev.conv === state.cur.id;
-  let reply = st ? st.text : '';
+  let reply = st ? stripListen(st.text) : '';
   if (here && st) {
     const secs = st.thoughtEnd ? Math.max(1, Math.round((st.thoughtEnd - st.thoughtStart) / 1000)) : 0;
     if (ev.mid) {
-      const stored = { id: ev.mid, role: 'bot', text: st.text.trim(), thought: st.thought.trim(), stats: ev.stats || {} };
+      const stored = { id: ev.mid, role: 'bot', text: stripListen(st.text).trim(), thought: st.thought.trim(), stats: ev.stats || {} };
       state.cur.messages.push(stored);
       if (st.ui) {
         st.ui.set(stored.text, stored.thought, false, secs);
@@ -442,6 +462,8 @@ async function finishStream(ev, errorText) {
   if (orbMode && (reply || errorText)) showPopup(reply || errorText);
   speakStreamed(st, true);                                         // whatever is left of the reply (it was spoken sentence by sentence while it streamed)
   if (reply) { try { if (typeof window.onReplyShown === 'function') await window.onReplyShown(reply); } catch (_) {} }
+  refreshCtx();
+  if (reply && orbMode) orbReact(reply);
   if (handsFree && !pending && !ttsBusy) handsFreeListen();
   else if (!handsFree && !orbMode) $input.focus();
 }
@@ -619,6 +641,95 @@ function toggleDictation() {
     },
   });
 }
+// ------------------------------------------------------------------ wake acknowledgement, reminders, context meter
+let ackCtx = null, ackAudio = null;
+function playTone() {
+  try {
+    ackCtx = ackCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = ackCtx.currentTime, vol = Math.max(0, Math.min(1, (+state.settings.ack_volume || 60) / 100));
+    [[880, 0], [1175, 0.11]].forEach(([f, d]) => {
+      const o = ackCtx.createOscillator(), g = ackCtx.createGain();
+      o.type = 'sine'; o.frequency.value = f; o.connect(g); g.connect(ackCtx.destination);
+      g.gain.setValueAtTime(0.0001, t + d); g.gain.exponentialRampToValueAtTime(Math.max(0.0002, 0.25 * vol), t + d + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.16);
+      o.start(t + d); o.stop(t + d + 0.18);
+    });
+  } catch (_) {}
+}
+async function playCustomAck() {
+  try {
+    const url = await api().get_ack_audio();
+    if (!url) return false;
+    ackAudio = new Audio(url); ackAudio.volume = Math.max(0, Math.min(1, (+state.settings.ack_volume || 60) / 100));
+    await new Promise(r => { ackAudio.addEventListener('loadedmetadata', r, { once: true }); ackAudio.addEventListener('error', r, { once: true }); setTimeout(r, 1500); });
+    if (ackAudio.duration > 10) { ackAudio = null; return false; }
+    ackAudio.play().catch(() => {}); return true;
+  } catch (_) { return false; }
+}
+async function acknowledge(kind) {
+  const mode = kind || state.settings.wake_ack || 'voice';
+  if (mode === 'silent') return;
+  if (mode === 'tone') { playTone(); return; }
+  if (mode === 'custom' && await playCustomAck()) return;
+  const phrase = (state.settings.ack_phrase || 'Yes?').trim() || 'Yes?';
+  if (orbMode) showPopup(phrase); else flash(phrase);
+  if (state.tts && (nativeOrb || orbMode || state.settings.speak_replies)) { ttsBusy = true; try { api().tts_speak(phrase); } catch (_) { ttsBusy = false; } }
+}
+function onReminder(ev) {
+  if (ev.conversations) { state.convs = ev.conversations; renderList(); }
+  toast(ev.text || 'Reminder', false, 9000);
+  showSnooze(ev);
+  if (state.panel === 'settings') refreshReminders(ev.items);
+  const here = state.cur && ev.conv === state.cur.id;
+  const mode = state.settings.wake_ack;
+  if (mode === 'tone' || mode === 'custom') acknowledge(mode); else if (state.tts && state.settings.speak_replies && ev.text) { try { api().tts_speak(ev.text); } catch (_) {} }
+  if (here && !pending) api().get_conversation(ev.conv).then(c => { state.cur = c; shownFrom = null; renderConversation(); refreshCtx(); });
+}
+function showSnooze(ev) {
+  const old = document.getElementById('snoozeBar'); if (old) old.remove();
+  const bar = h('div', { id: 'snoozeBar', class: 'snooze-bar', role: 'status' },
+    h('span', { text: ev.timer ? 'Timer finished' : (ev.what || 'Reminder') }),
+    h('button', { class: 'btn sm primary', type: 'button', id: 'snoozeBtn', text: 'Snooze 5 min', onclick: async () => { await api().snooze_reminder(ev.what || '', ev.conv || '', !!ev.timer, 5); bar.remove(); flash('Snoozed for 5 minutes'); } }),
+    h('button', { class: 'btn sm', type: 'button', text: 'Dismiss', onclick: () => bar.remove() }));
+  document.body.append(bar);
+  setTimeout(() => bar.remove(), 30000);
+}
+let swTimer = 0;
+async function refreshStopwatch(st) {
+  const box = document.getElementById('stopwatchBox'); if (!box) return;
+  try { st = st || await api().stopwatch('read'); } catch (_) { return; }
+  const fmt = s => { s = Math.floor(s); const h_ = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return (h_ ? h_ + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
+  box.innerHTML = '';
+  const t = h('span', { class: 'sw-time', id: 'swTime', text: fmt(st.elapsed) });
+  const go = async a => { refreshStopwatch(await api().stopwatch(a)); };
+  box.append(h('div', { class: 'row' }, h('span', {}, 'Stopwatch ', t),
+    h('span', { class: 'row-gap' }, st.running ? h('button', { class: 'btn sm', type: 'button', id: 'swStop', text: 'Stop', onclick: () => go('stop') }) : h('button', { class: 'btn sm primary', type: 'button', id: 'swStart', text: 'Start', onclick: () => go('start') }),
+      h('button', { class: 'btn sm', type: 'button', id: 'swReset', text: 'Reset', onclick: () => go('reset') }))));
+  clearInterval(swTimer);
+  if (st.running) { const t0 = Date.now(), base = st.elapsed; swTimer = setInterval(() => { const el = document.getElementById('swTime'); if (!el) { clearInterval(swTimer); return; } el.textContent = fmt(base + (Date.now() - t0) / 1000); }, 500); }
+}
+async function refreshCtx() {
+  const el = $('ctxChip'); if (!el || !state.cur) return;
+  try {
+    const u = await api().context_usage(state.cur.id);
+    el.textContent = 'CTX ' + u.percent + '%'; el.hidden = false;
+    el.title = `About ${u.used} of ${u.max} tokens of the context window are used by this conversation`;
+    el.classList.toggle('warn', u.percent >= 80);
+  } catch (_) {}
+}
+async function refreshReminders(items) {
+  const box = document.getElementById('reminderList'); if (!box) return;
+  try { items = items || await api().list_reminders(); } catch (_) { items = []; }
+  box.innerHTML = '';
+  if (!items.length) { box.append(h("div", { class: "hint2", text: "No reminders or timers pending." })); return; }
+  items.forEach(r => {
+    const when = new Date(r.due * 1000).toLocaleString([], { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' });
+    box.append(h('div', { class: 'row', 'data-rid': r.id }, h('span', { text: (r.timer ? 'Timer' : r.text) + (r.paused ? ' - paused, ' + Math.ceil((r.left || 0) / 60) + ' min left' : ' - ' + when) }),
+      h('span', { class: 'row-gap' },
+        h('button', { class: 'btn sm pause', type: 'button', text: r.paused ? 'Resume' : 'Pause', onclick: async () => refreshReminders(r.paused ? await api().resume_reminder(r.id) : await api().pause_reminder(r.id)) }),
+        h('button', { class: 'btn sm del', type: 'button', text: 'Delete', onclick: async () => refreshReminders(await api().delete_reminder(r.id)) }))));
+  });
+}
+
 function handsFreeListen() {
   if (!handsFree || listening || pending || ttsBusy) return;
   listening = true; updateUI();
@@ -636,7 +747,7 @@ function handsFreeListen() {
         let r = { ok: true, command: final };
         try { r = await api().wake_check(final); } catch (_) {}
         final = r.ok ? r.command : '';
-        if (r.ok && !final) { if (orbMode) showPopup('Yes?'); else flash('Yes?'); if ((nativeOrb || orbMode) && state.tts) { ttsBusy = true; try { api().tts_speak('Yes?'); } catch (_) { ttsBusy = false; } } }
+        if (r.ok && !final) acknowledge();
         if (!handsFree) return;
       }
       if (final) send(final); else if (sttEngine() === pySTT) handsFreeListen(); else setTimeout(handsFreeListen, 350);
@@ -681,11 +792,46 @@ async function setOrbMode(on, fromNative) {
   if (on) { try { native = !!(await api().set_orb_mode(true)); } catch (_) {} nativeOrb = native; lastOrbState = ''; }
   else { native = nativeOrb; clearPopup(); if (native && !fromNative) { try { await api().set_orb_mode(false); } catch (_) {} } nativeOrb = false; }
   document.body.classList.toggle('orb-mode', on && !native);
+  if (on && !native) startOrbLoop();
   if (on) { orbPrevHF = handsFree; if (!handsFree) startHandsFree(); }
   else { if (!orbPrevHF && handsFree) stopHandsFree(); resize(); $input.focus(); }
   updateUI();
   if (typeof window.onOrbMode === 'function') window.onOrbMode(on);
 }
+// Orb extras: mood pulse, sleep look and (in the in-page orb) trailing the mouse. The floating Windows orb does these natively.
+const MOODS = [['sad', /\b(sorry|unfortunately|can'?t|cannot|couldn'?t|failed|error|lo siento|no puedo|no pude)\b/i], ['happy', /\b(great|glad|congrat\w*|awesome|perfect|done|thanks|thank you|genial|me alegra|perfecto|listo|gracias)\b|!/i], ['curious', /\?\s*$/]];
+function orbReact(text) {
+  if (state.settings.orb_mood === false) return;
+  if (nativeOrb) { try { api().orb_mood(text); } catch (_) {} return; }
+  const tail = (text || '').trim().slice(-240), m = MOODS.find(([, re]) => re.test(tail));
+  const v = $('orbView') || document.querySelector('.orb-view');
+  if (!m || !v) return;
+  v.dataset.mood = m[0]; setTimeout(() => { delete v.dataset.mood; }, 2000);
+}
+let orbIdleAt = Date.now(), orbPos = { x: 0, y: 0, tx: 0, ty: 0 }, orbRaf = 0;
+function orbWake() { orbIdleAt = Date.now(); const v = document.querySelector('.orb-view'); if (v) delete v.dataset.sleep; }
+function orbLoop() {
+  orbRaf = 0;
+  if (!orbMode || nativeOrb) return;
+  const wrap = $('orbWrap'), v = document.querySelector('.orb-view');
+  if (state.settings.orb_follow) {
+    orbPos.x += (orbPos.tx - orbPos.x) * .16; orbPos.y += (orbPos.ty - orbPos.y) * .16;
+    wrap.style.setProperty('--fx', orbPos.x.toFixed(1) + 'px'); wrap.style.setProperty('--fy', orbPos.y.toFixed(1) + 'px');
+  } else { wrap.style.removeProperty('--fx'); wrap.style.removeProperty('--fy'); }
+  const asleep = state.settings.orb_sleep !== false && !pending && !handsFree && !ttsBusy && Date.now() - orbIdleAt > 90000;
+  if (asleep) v.dataset.sleep = '1'; else delete v.dataset.sleep;
+  orbRaf = requestAnimationFrame(orbLoop);
+}
+document.addEventListener('mousemove', e => {
+  if (!orbMode || nativeOrb) return;
+  orbWake();
+  const r = $('orbWrap').getBoundingClientRect(), cx = innerWidth / 2, cy = innerHeight / 2, gap = r.width / 2 + 36;
+  if (e.clientX >= cx + orbPos.x - r.width / 2 && e.clientX <= cx + orbPos.x + r.width / 2 && e.clientY >= cy + orbPos.y - r.height / 2 && e.clientY <= cy + orbPos.y + r.height / 2) { orbPos.tx = orbPos.x; orbPos.ty = orbPos.y; return; }
+  const lim = (v, half) => Math.max(-half + r.width / 2, Math.min(half - r.width / 2, v));
+  orbPos.tx = lim(e.clientX - cx + gap, innerWidth / 2); orbPos.ty = lim(e.clientY - cy + gap, innerHeight / 2);
+  if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop);
+});
+function startOrbLoop() { orbWake(); if (!orbRaf) orbRaf = requestAnimationFrame(orbLoop); }
 window.setOrbLevel = v => { if (!nativeOrb) $('orbWrap').style.setProperty('--level', Math.max(0, Math.min(1, +v || 0))); };
 
 // ------------------------------------------------------------------ conversations drawer
@@ -722,7 +868,7 @@ function renderList() {
         const rest = await api().delete_conversation(c.id);
         if (state.cur.id === c.id) {
           state.cur = rest.length ? await api().get_conversation(rest[0].id) : await api().new_conversation();
-          renderConversation();
+          shownFrom = null; renderConversation();
         }
         state.convs = await api().list_conversations($('search').value);
         renderList();
@@ -735,7 +881,7 @@ function renderList() {
 async function openConversation(id) {
   if (!state.cur || id !== state.cur.id) {
     state.cur = await api().get_conversation(id);
-    clearPopup(); renderConversation();
+    clearPopup(); shownFrom = null; renderConversation(); refreshCtx();
   }
   renderList(); closeDrawer(false); $input.focus();
 }
@@ -743,7 +889,7 @@ async function startNewConversation() {
   clearPopup();
   if (!state.cur.messages.length) { closeDrawer(false); $input.focus(); return; }
   state.cur = await api().new_conversation();
-  renderConversation();
+  shownFrom = null; renderConversation(); refreshCtx();
   state.convs = await api().list_conversations('');
   renderList(); closeDrawer(false); $input.focus();
 }
@@ -1003,6 +1149,7 @@ function saveSetting(patch, immediate = false) {
 // ------------------------------------------------------------------ panels
 const $panel = $('panelOverlay'), $panelBody = $('panelBody');
 const PANEL_TITLES = { models: 'Models', api: 'API provider', settings: 'Settings' };
+const SETTINGS_CATS = [['chat', 'Chat'], ['model', 'Model'], ['voice', 'Voice'], ['computer', 'Computer'], ['orb', 'Orb'], ['general', 'General'], ['app', 'App']];
 
 function openPanel(name, opts = {}) {
   closeMenu();
@@ -1016,6 +1163,8 @@ function renderPanel() {
   const keep = $panelBody.scrollTop;
   $('panelTitle').textContent = PANEL_TITLES[state.panel] || '';
   document.querySelectorAll('#panelTabs .tab').forEach(t => t.setAttribute('aria-selected', t.dataset.panel === state.panel));
+  $('panelTabs').hidden = state.panel === 'settings';
+  $('panelDialog').classList.toggle('settings', state.panel === 'settings');
   $panelBody.innerHTML = '';
   ({ models: renderModelsPanel, api: renderApiPanel, settings: renderSettingsPanel })[state.panel]();
   $panelBody.scrollTop = keep;
@@ -1066,7 +1215,14 @@ function renderModelsPanel() {
   const b = $panelBody, rt = (state.scan && state.scan.runtime) || state.model.runtime || {};
   if (state.welcome) b.append(h('div', { class: 'banner' }, h('strong', { text: 'Welcome to Reo. ' }),
     'Reo runs an AI model on your own computer. Pick the recommended model below and it will be downloaded once. ' +
-    'You can also connect an API provider (API provider tab) or add a .gguf file you already have.'));
+    'You can also connect an API provider (API provider tab) or add a .gguf file you already have.',
+    h('div', { style: 'margin-top:10px' }, h('button', { class: 'btn primary', type: 'button', id: 'setupAll', text: 'Set up everything for me', onclick: async (e) => {
+      e.target.disabled = true;
+      let r = {}; try { r = await api().first_run_setup(); } catch (_) {}
+      const parts = [r.model ? 'the recommended model' : null, r.speech ? 'the speech model' : null, r.voice ? 'a voice' : null].filter(Boolean);
+      toast(parts.length ? 'Downloading ' + parts.join(', ') + '. You can keep using Reo while it finishes.' : 'Everything needed is already installed.', false, 6000);
+      e.target.textContent = 'Setting up...';
+    } }), h('div', { class: 'hint2', text: 'Downloads the model that fits this computer, the speech model and an offline voice. Nothing is installed outside Reo\'s folder.' }))));
   const hwNow = state.scan && state.scan.hardware, nvidia = !!(hwNow && hwNow.best_gpu && hwNow.best_gpu.vendor === 'nvidia');
   if (rt.installed === false) {
     const box = h('div', { class: 'banner warn' }, h('div', {}, 'The llama.cpp runtime could not start: ' + (rt.error || 'unknown error')),
@@ -1249,6 +1405,104 @@ function numberField(key, label, min, max, hint) {
   return h('div', { class: 'field' }, h('label', { text: label }), inp, hint ? h('div', { class: 'hint2', text: hint }) : null);
 }
 
+function selectRow(key, label, options, hint, after) {
+  const sel = h('select', { class: 'in', 'aria-label': label }, options.map(([v, t]) => h('option', { value: v, selected: v === state.settings[key], text: t })));
+  sel.addEventListener('change', () => { saveSetting({ [key]: sel.value }, true); if (after) after(sel.value); });
+  return h('div', { class: 'field' }, h('label', { text: label }), sel, hint ? h('div', { class: 'hint2', text: hint }) : null);
+}
+function textRow(key, label, placeholder, hint) {
+  const inp = h('input', { class: 'in', type: 'text', placeholder, value: state.settings[key] || '', maxlength: 40, 'aria-label': label });
+  inp.addEventListener('input', () => saveSetting({ [key]: inp.value.trim() }));
+  return h('div', { class: 'field' }, h('label', { text: label }), inp, hint ? h('div', { class: 'hint2', text: hint }) : null);
+}
+function conversationCard() {
+  return h('div', { class: 'card', id: 'convCard' }, h('h3', { text: 'Conversation' }),
+    h('div', { class: 'hint2', text: 'The communication style (tone of the replies, never the facts) is the Style menu in the bar above the chat box.' }),
+    toggleRow('brief_replies', 'Brief replies', 'Short answers of one or two sentences unless you ask for detail.'),
+    selectRow('reply_language', 'Reply language', Object.entries(state.replyLangs || {}), 'Automatic answers in the language you wrote in.'));
+}
+function ackCard() {
+  const s = state.settings, msg = h('div', { class: 'hint2', id: 'ackMsg' });
+  const mode = selectRow('wake_ack', 'When Reo hears only his name', [['voice', 'Say a phrase'], ['tone', 'Play a short tone'], ['custom', 'Play my own sound'], ['silent', 'Nothing']], null, () => renderPanel());
+  const kids = [h('h3', { text: 'Wake acknowledgement' }), mode];
+  if (s.wake_ack === 'voice' || !s.wake_ack) kids.push(textRow('ack_phrase', 'Phrase', 'Yes?'));
+  if (s.wake_ack === 'custom') {
+    kids.push(h('div', { class: 'row' }, h('span', { class: 'muted', text: s.ack_audio ? 'Sound chosen.' : 'No sound chosen.' }),
+      h('span', { class: 'row-gap' },
+        h('button', { class: 'btn sm', type: 'button', id: 'ackPick', text: 'Choose file', onclick: async () => {
+          const r = await api().pick_ack_audio();
+          if (r && r.error) { msg.textContent = r.error; return; }
+          if (r && r.ok) { state.settings.wake_ack = 'custom'; state.settings.ack_audio = 'set'; renderPanel(); }
+        } }),
+        s.ack_audio ? h('button', { class: 'btn sm', type: 'button', text: 'Remove', onclick: async () => { await api().clear_ack_audio(); state.settings.ack_audio = ''; renderPanel(); } }) : null)));
+  }
+  if (s.wake_ack === 'tone' || s.wake_ack === 'custom') {
+    kids.push(rangeField('ack_volume', 'Volume', 0, 100, 5, v => v + '%'));
+    kids.push(h('div', {}, h('button', { class: 'btn sm', type: 'button', text: 'Test', onclick: () => acknowledge() })));
+  }
+  kids.push(msg);
+  return h('div', { class: 'card', id: 'ackCard' }, ...kids);
+}
+function remindersCard() {
+  const text = h('input', { class: 'in', type: 'text', id: 'remText', placeholder: 'What to remind you of (empty = timer)', maxlength: 120, 'aria-label': 'Reminder text' });
+  const mins = h('input', { class: 'in', type: 'number', id: 'remMins', min: 1, max: 43200, value: 10, 'aria-label': 'Minutes from now' });
+  const msg = h('div', { class: 'hint2' });
+  const add = h('button', { class: 'btn sm primary', type: 'button', id: 'remAdd', text: 'Add', onclick: async () => {
+    const r = await api().add_reminder(text.value, +mins.value, state.cur ? state.cur.id : '');
+    if (r.error) { msg.textContent = r.error; return; }
+    msg.textContent = ''; text.value = ''; refreshReminders(r.items);
+  } });
+  const list = h('div', { id: 'reminderList' });
+  const swBox = h('div', { id: 'stopwatchBox' });
+  setTimeout(() => { refreshReminders(); refreshStopwatch(); }, 0);
+  return h('div', { class: 'card', id: 'remCard' }, h('h3', { text: 'Reminders and timers' }),
+    h('div', { class: 'hint2', text: 'You can also just say it: "remind me in 10 minutes to call Ana" or "set a timer for 5 minutes". Reminders are kept while Reo is closed and fire when he opens.' }),
+    list, swBox, h('div', { class: 'grid2' }, h('div', { class: 'field' }, text), h('div', { class: 'field' }, h('div', { class: 'row-gap' }, mins, h('span', { class: 'muted', text: 'min' })))), h('div', {}, add), msg);
+}
+function capabilitiesCard() {
+  const box = h('div', { id: 'capBox' });
+  (async () => {
+    const c = await api().get_capabilities();
+    Object.entries(c.labels).forEach(([k, label]) => {
+      const sw = h('button', { class: 'switch', type: 'button', role: 'switch', 'data-cap': k, 'aria-checked': String(!!c.grants[k]),
+        onclick: async () => { const v = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', v); await api().set_capability(k, v); } },
+        h('span', { class: 'track' }, h('span', { class: 'thumb' })), h('span', { text: label }));
+      box.append(h('div', { class: 'field' }, sw));
+    });
+  })();
+  return h('div', { class: 'card', id: 'capCard' }, h('h3', { text: 'What Reo may do when you ask' }),
+    h('div', { class: 'hint2', text: 'Only applies when Computer Control is on. These switches last until Reo closes; files and commands start off every time.' }), box);
+}
+function supportCard() {
+  const msg = h('div', { class: 'hint2', id: 'supportMsg' });
+  const note = h('input', { class: 'in', type: 'text', id: 'bugNote', placeholder: 'What went wrong (optional)', maxlength: 300, 'aria-label': 'Bug report note' });
+  const sure = (btn, label, fn) => {
+    let armed = false;
+    btn.addEventListener('click', () => {
+      if (!armed) { armed = true; btn.textContent = 'Sure? Click again'; setTimeout(() => { armed = false; btn.textContent = label; }, 4000); return; }
+      armed = false; btn.textContent = label; fn();
+    });
+    return btn;
+  };
+  const b = (label, id) => h('button', { class: 'btn sm', type: 'button', id, text: label });
+  return h('div', { class: 'card', id: 'supportCard' }, h('h3', { text: 'App' }),
+    h('div', { class: 'field' }, h('label', { text: 'Bug report' }), note,
+      h('div', { class: 'hint2', text: 'Saves a diagnostics file with your settings and recent log. It never includes messages, keys or your prompt.' }),
+      h('div', {}, h('button', { class: 'btn sm', type: 'button', id: 'bugBtn', text: 'Create report', onclick: async () => {
+        const r = await api().bug_report(note.value);
+        msg.textContent = r.error ? r.error : 'Saved to ' + r.path;
+        if (r.text) { try { await navigator.clipboard.writeText(r.text); msg.textContent += ' (copied)'; } catch (_) {} }
+      } }))),
+    h('div', { class: 'row-gap' },
+      h('button', { class: 'btn sm', type: 'button', id: 'sleepBtn', text: 'Sleep', title: 'Release the model and microphone and minimise', onclick: async () => { await api().sleep_app(); toast('Reo is asleep. Load the model from the chip to wake him.'); } }),
+      sure(b('Restart', 'restartBtn'), 'Restart', () => api().restart_app()),
+      sure(b('Quit', 'quitBtn'), 'Quit', () => api().quit_app()),
+      sure(b('Delete all conversations', 'wipeBtn'), 'Delete all conversations', async () => {
+        const r = await api().delete_all_conversations();
+        state.cur = r.conversation; state.convs = r.conversations; shownFrom = null; renderConversation(); renderList(); refreshCtx(); msg.textContent = 'All conversations deleted.';
+      })), msg);
+}
+
 const STT_MODELS = [['tiny', 'Tiny - fastest, about 75 MB'], ['base', 'Base - balanced, about 145 MB'], ['small', 'Small - more accurate, about 480 MB'], ['medium', 'Medium - best, about 1.5 GB, slow on CPU']];
 const STT_LANGS = [['auto', 'Detect automatically'], ['en', 'English'], ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['it', 'Italian'], ['pt', 'Portuguese'], ['ja', 'Japanese'], ['zh', 'Chinese']];
 function generalCard() {
@@ -1294,7 +1548,10 @@ function computerCard() {
 function orbCard() {
   return h('div', { class: 'card' }, h('h3', { text: 'Orb' }),
     h('div', { class: 'hint2', text: 'The floating orb used by orb mode. The change applies right away, even while the orb is showing.' }),
-    rangeField('orb_size', 'Orb size', 45, 260, 5, v => v + ' px'));
+    rangeField('orb_size', 'Orb size', 45, 260, 5, v => v + ' px'),
+    toggleRow('orb_follow', 'Follow the mouse', 'The orb trails your cursor, staying beside it. Move the cursor onto the orb to click it. Drag it to put it somewhere fixed.'),
+    toggleRow('orb_sleep', 'Sleep look', 'After 90 seconds with nothing to do the orb dims and breathes slowly. It wakes when you speak, click or move the mouse.'),
+    toggleRow('orb_mood', 'Mood pulse', 'The orb flashes a colour that matches the tone of a reply: green for good news, blue for bad, violet for a question.'));
 }
 const st2tts = () => state.tts ? 'Uses Piper neural voices (or Windows system voice). Pick one under Reo\'s Voice.' : 'Not available: no speech engine was found. Open Reo\'s Voice to install one.';
 function speechCard() {
@@ -1310,44 +1567,101 @@ function speechCard() {
     h('div', { class: 'grid2' },
       h('div', { class: 'field' }, h('label', { text: 'Model' }), mk(STT_MODELS, s.stt_model || 'base', 'stt_model', 'Speech model')),
       h('div', { class: 'field' }, h('label', { text: 'Language' }), mk(STT_LANGS, s.stt_language || 'auto', 'stt_language', 'Speech language'))),
-    toggleRow('wake_word', 'Only answer when I say "Reo" (hands-free and orb)', 'Say "Reo", "Hey Reo" or "Hello Reo", then your request. Saying only the name makes him listen for your next sentence.'),
-    toggleRow('speak_replies', 'Read replies aloud in normal mode', 'Orb mode always speaks, whatever this says. ' + st2tts()),
+    h('div', { class: 'hint2', text: 'Read aloud and Wake word only are switches in the bar above the chat box. Say "Reo", "Hey Reo" or "Hello Reo", then your request; saying only the name makes him listen for your next sentence.' }),
+    textRow('wake_phrase', 'Custom wake phrase (optional)', 'e.g. computer', 'Also answers to this phrase, besides "Reo".'),
+    toggleRow('wake_follow_up', 'Keep listening after a question', 'When Reo asks you something, he listens for your answer for 12 seconds without hearing his name.'),
+    h('div', { class: 'hint2', text: st2tts() }),
     h('div', { class: 'row' }, h('span', { class: 'muted', text: st.cached ? 'Model downloaded.' : `Downloads once (about ${st.download_mb || 145} MB) the first time you speak.` }),
       st.ok ? h('button', { class: 'btn sm', type: 'button', text: st.cached ? 'Load now' : 'Download now', onclick: () => api().stt_prepare() }) : null));
 }
-function renderSettingsPanel() {
-  const s = state.settings, b = $panelBody;
+function personalityCard() {
+  const s = state.settings;
   const prompt = h('textarea', { class: 'in', rows: 5 }); prompt.value = s.system_prompt || '';
   prompt.addEventListener('input', () => saveSetting({ system_prompt: prompt.value }));
+  return h('div', { class: 'card', id: 'persCard' }, h('h3', { text: 'Personality' }),
+    h('div', { class: 'field' }, h('label', { text: 'System prompt' }), prompt, h('div', { class: 'hint2', text: 'Sent before every conversation. Change who Reo is and how it answers.' })),
+    h('div', {}, h('button', { class: 'btn sm', type: 'button', text: 'Reset to default', onclick: async () => {
+      const snap = await api().reset_system_prompt();
+      if (snap && snap.system_prompt != null) { prompt.value = snap.system_prompt; state.settings.system_prompt = snap.system_prompt; }
+      else if (snap && snap.settings) { prompt.value = snap.settings.system_prompt || ''; state.settings = snap.settings; }
+    } })));
+}
+function generationCard() {
+  return h('div', { class: 'card' }, h('h3', { text: 'Generation' }),
+    rangeField('temperature', 'Creativity (temperature)', 0, 2, 0.05, v => (+v).toFixed(2)),
+    rangeField('top_p', 'Top-p', 0.1, 1, 0.05, v => (+v).toFixed(2)),
+    numberField('max_tokens', 'Maximum answer length (tokens)', 64, 16384));
+}
+function runtimeSelect() {
+  const sel = h('select', { class: 'in', id: 'runtimeSel', 'aria-label': 'Model runtime' },
+    [['builtin', 'Built in (default)'], ['server', 'Managed llama-server']].map(([v, t]) => h('option', { value: v, selected: v === (state.settings.runtime_mode || 'builtin'), text: t })));
+  const msg = h('div', { class: 'hint2', id: 'runtimeMsg' });
+  const box = h('div', {}, sel, msg);
+  const show = async () => {
+    msg.textContent = '';
+    if (sel.value !== 'server') return;
+    const st = await api().server_status();
+    if (!st.installed) {
+      msg.append('llama-server is not downloaded yet. ', h('button', { class: 'btn sm primary', type: 'button', id: 'serverDl', text: 'Download it', onclick: async (e) => { e.target.disabled = true; await api().install_server(''); msg.textContent = 'Downloading...'; } }));
+    } else if (!st.active) msg.append('Restart Reo to start using it. ', h('button', { class: 'btn sm', type: 'button', text: 'Restart now', onclick: () => api().restart_app() }));
+    else msg.textContent = 'Running through llama-server.';
+  };
+  sel.addEventListener('change', () => { saveSetting({ runtime_mode: sel.value }, true); show(); });
+  window.__serverUi = (ev) => { msg.textContent = ev.state === 'error' ? ev.message : ev.state === 'done' ? ev.message : (ev.message || 'Working...') + (ev.total ? ' ' + Math.round(ev.done * 100 / ev.total) + '%' : ''); };
+  show();
+  return box;
+}
+function performanceCard() {
+  const s = state.settings;
   const ctx = h('select', { class: 'in' }, [2048, 4096, 8192, 16384, 32768].map(v => h('option', { value: v, selected: v === +s.n_ctx, text: v + ' tokens' })));
   ctx.addEventListener('change', () => saveSetting({ n_ctx: +ctx.value }));
-  b.append(
-    h('div', { class: 'card' }, h('h3', { text: 'Personality' }),
-      h('div', { class: 'field' }, h('label', { text: 'System prompt' }), prompt, h('div', { class: 'hint2', text: 'Sent before every conversation. Change who Reo is and how it answers.' })),
-      h('div', {}, h('button', { class: 'btn sm', type: 'button', text: 'Reset to default', onclick: async () => {
-        const snap = await api().reset_system_prompt();
-        if (snap && snap.system_prompt != null) { prompt.value = snap.system_prompt; state.settings.system_prompt = snap.system_prompt; }
-        else if (snap && snap.settings) { prompt.value = snap.settings.system_prompt || ''; state.settings = snap.settings; }
-      } }))),
-    h('div', { class: 'card' }, h('h3', { text: 'Generation' }),
-      rangeField('temperature', 'Creativity (temperature)', 0, 2, 0.05, v => (+v).toFixed(2)),
-      rangeField('top_p', 'Top-p', 0.1, 1, 0.05, v => (+v).toFixed(2)),
-      numberField('max_tokens', 'Maximum answer length (tokens)', 64, 16384)),
-    h('div', { class: 'card' }, h('h3', { text: 'Performance (applies the next time a model loads)' }),
-      h('div', { class: 'grid2' }, h('div', { class: 'field' }, h('label', { text: 'Context size' }), ctx, h('div', { class: 'hint2', text: 'Bigger remembers more but uses more memory.' })),
-        h('div', { class: 'field' }, h('label', { text: 'Run on' }), computeSelect(), h('div', { class: 'hint2', text: 'Graphics card needs the GPU runtime.' }))),
-      numberField('n_gpu_layers', 'GPU layers (advanced)', -1, 200, '-1 = let Reo decide from the setting above, 0 = none, or an exact layer count'),
-      numberField('n_threads', 'CPU threads', 0, 128, '0 = automatic'),
-      toggleRow('autoload', 'Load the last model when Reo starts'),
-      state.model.loaded ? h('div', {}, h('button', { class: 'btn sm primary', type: 'button', text: 'Reload model now', onclick: () => api().load_model(state.model.path) })) : null),
-    speechCard(),
-    clockCard(),
-    generalCard(),
-    computerCard(),
-    orbCard(),
-    h('div', { class: 'card' }, h('h3', { text: 'Your data' }),
-      h('div', { class: 'row' }, h('span', { class: 'muted', text: 'Conversations, models and settings are stored on this computer.' }),
-        h('button', { class: 'btn sm', type: 'button', text: 'Open data folder', onclick: () => api().open_folder('data') }))));
+  return h('div', { class: 'card' }, h('h3', { text: 'Performance' }), h('div', { class: 'hint2', text: 'Applies the next time a model loads.' }),
+    h('div', { class: 'grid2' }, h('div', { class: 'field' }, h('label', { text: 'Context size' }), ctx, h('div', { class: 'hint2', text: 'Bigger remembers more but uses more memory.' })),
+      h('div', { class: 'field' }, h('label', { text: 'Run on' }), computeSelect(), h('div', { class: 'hint2', text: 'Graphics card needs the GPU runtime.' }))),
+    numberField('n_gpu_layers', 'GPU layers (advanced)', -1, 200, '-1 = let Reo decide from the setting above, 0 = none, or an exact layer count'),
+    numberField('n_threads', 'CPU threads', 0, 128, '0 = automatic'),
+    h('div', { class: 'field', id: 'runtimeField' }, h('label', { text: 'Model runtime' }), runtimeSelect(),
+      h('div', { class: 'hint2', text: 'Built in runs the model inside Reo. Managed server starts the official llama-server hidden in the background (like Capri); it needs a one-time download and a restart.' })),
+    toggleRow('autoload', 'Load the last model when Reo starts'),
+    state.model.loaded ? h('div', {}, h('button', { class: 'btn sm primary', type: 'button', text: 'Reload model now', onclick: () => api().load_model(state.model.path) })) : null);
+}
+function dataCard() {
+  return h('div', { class: 'card' }, h('h3', { text: 'Your data' }),
+    h('div', { class: 'row' }, h('span', { class: 'muted', text: 'Conversations, models and settings are stored on this computer.' }),
+      h('button', { class: 'btn sm', type: 'button', text: 'Open data folder', onclick: () => api().open_folder('data') })));
+}
+const SETTINGS_BUILDERS = {
+  chat: [personalityCard, conversationCard],
+  model: [generationCard, performanceCard],
+  voice: [speechCard, ackCard],
+  computer: [computerCard, capabilitiesCard],
+  orb: [orbCard],
+  general: [generalCard, clockCard, remindersCard],
+  app: [supportCard, dataCard],
+};
+function renderSettingsPanel() {
+  const b = $panelBody;
+  const cat = SETTINGS_BUILDERS[state.settingsCat] ? state.settingsCat : 'chat';
+  const find = h('input', { class: 'in', type: 'search', id: 'settingsSearch', placeholder: 'Search settings', 'aria-label': 'Search settings' });
+  const nav = h('nav', { class: 'settings-nav', 'aria-label': 'Settings categories' },
+    ...SETTINGS_CATS.map(([k, t]) => h('button', { type: 'button', class: 'cat', 'data-cat': k, 'aria-current': String(k === cat), text: t,
+      onclick: () => { state.settingsCat = k; renderPanel(); } })));
+  const content = h('div', { class: 'settings-content', id: 'settingsContent' });
+  const fill = list => list.forEach(fn => content.append(fn()));
+  fill(SETTINGS_BUILDERS[cat]);
+  find.addEventListener('input', () => {
+    const q = find.value.trim().toLowerCase();
+    content.innerHTML = '';
+    if (!q) { nav.classList.remove('off'); fill(SETTINGS_BUILDERS[cat]); return; }
+    nav.classList.add('off');
+    Object.values(SETTINGS_BUILDERS).flat().forEach(fn => {
+      const card = fn();
+      const text = card.textContent.toLowerCase() + Array.from(card.querySelectorAll('input,select,textarea')).map(i => (i.getAttribute('aria-label') || '') + (i.placeholder || '')).join(' ').toLowerCase();
+      if (text.includes(q)) content.append(card);
+    });
+    if (!content.children.length) content.append(h('div', { class: 'hint2', text: 'No settings match.' }));
+  });
+  b.append(h('div', { class: 'settings-layout' }, nav, h('div', { class: 'settings-main' }, h('div', { class: 'field' }, find), content)));
 }
 
 // ------------------------------------------------------------------ init + events
@@ -1410,6 +1724,13 @@ function wire() {
       if (key === 'computerControl') { flash(v ? 'Computer Control is on' : 'Computer Control is off'); if (typeof window.onComputerControl === 'function') window.onComputerControl(v); }
     });
   });
+  $('styleSel').addEventListener('change', () => saveSetting({ comm_style: $('styleSel').value }, true));
+  $('qrAdd').addEventListener('click', async () => {
+    const r = await api().add_reminder($('qrText').value, +$('qrMins').value, state.cur ? state.cur.id : '');
+    if (r.error) { toast(r.error, true); return; }
+    $('qrText').value = ''; flash('Reminder set'); if (state.panel === 'settings') refreshReminders(r.items);
+  });
+  $('qrText').addEventListener('keydown', e => { if (e.key === 'Enter') $('qrAdd').click(); });
   $('cloudBtn').addEventListener('click', () => {
     const v = !state.settings.cloudModel; saveSetting({ cloudModel: v }, true);
     flash(v ? 'Cloud model on: answering with the API provider' : 'Cloud model off: answering with the local model');
@@ -1492,13 +1813,15 @@ async function init() {
     $('winbar').addEventListener('dblclick', e => { if (!e.target.closest('button')) api().window_toggle_maximize(); });
   }
   state.modelsDir = boot.models_dir; state.presets = boot.presets; state.installed = boot.installed; state.model = boot.model; state.cloudReady = boot.cloud_ready; state.convs = boot.conversations;
+  state.styles = boot.styles || {}; state.replyLangs = boot.reply_languages || {};
+  { const ss = $('styleSel'); ss.innerHTML = ''; Object.entries(state.styles).forEach(([k, t]) => ss.append(h('option', { value: k, text: t }))); ss.value = state.settings.comm_style || 'neutral'; }
   micDeviceId = store.get('reo.mic'); voiceId = state.settings.voice || store.get('reo.voice');
   $('micValue').textContent = store.get('reo.micLabel') || 'System default';
   $('voiceValue').textContent = store.get('reo.voiceName') || (voiceId || 'Not selected');
   document.querySelectorAll('.switch[data-key]').forEach(sw => sw.setAttribute('aria-checked', !!state.settings[sw.dataset.key]));
   state.cur = boot.conversations.length ? await api().get_conversation(boot.conversations[0].id) : await api().new_conversation();
   if (!boot.conversations.length) state.convs = await api().list_conversations('');
-  renderConversation(); renderList(); resize(); updateUI();
+  renderConversation(); renderList(); resize(); updateUI(); refreshCtx();
   if (boot.first_run) openPanel('models', { welcome: true });
 }
 

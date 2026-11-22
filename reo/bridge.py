@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import clock, computer, docs, knowledge, web, lang, startup, currency, hardware, models, wake
+from . import clock, computer, docs, knowledge, web, lang, startup, currency, hardware, models, wake, styles, reminders, support, mood, diaglog
 from .config import Settings, app_dir, models_dir, voicebanks_dir
 from .engines.cloud import PRESETS, CloudEngine, CloudError
 from .engines.local import LocalEngine
@@ -40,17 +40,32 @@ class Bridge:
         if mock:
             from .engines.mock import MockEngine
             local = MockEngine()
+        if local is None and self._settings.get("runtime_mode") == "server":
+            from .engines.server import ServerEngine
+            local = ServerEngine()
         self._local = local or LocalEngine()
         self._cloud = CloudEngine(self._settings)
         self._stt = stt or (MockSTT(self._emit_stt) if mock else SpeechToText(self._settings, self._emit_stt))
         self._native = None           # the floating orb (native Windows layered windows)
         self._native_factory = None   # tests inject a fake
         self._orb_on = False
+        if not self._settings.get("ctx_migrated"):
+            patch = {"ctx_migrated": True}
+            if int(self._settings.get("n_ctx") or 0) == 4096:
+                patch["n_ctx"] = 8192
+            self._settings.update(patch)
+        self._diag = diaglog.DiagnosticLog(app_dir() / "logs" / "desktop-events.jsonl")
+        self._diag.write(event="startup", build=str(__import__("reo").BUILD), frozen=bool(getattr(sys, "frozen", False)))
         self._geo_impl = None
         self._maxed = False
         self._drag = None
         self._computer = None
         self._awake_until = 0.0
+        self._follow_until = 0.0        # ;listen window: the next sentence needs no wake phrase
+        self._follow_count = 0
+        self._caps = dict(computer.CAPABILITY_DEFAULTS)      # per-session grants, off/on as in Settings > Capabilities; reset at every launch
+        self._reminders = reminders.Reminders(app_dir() / "reminders.json", self._reminder_due)
+        self._stopwatch = reminders.Stopwatch(app_dir() / "stopwatch.json")
         self._engine_busy = False
         self._engine_healed = False
         self._tts = MockSpeaker(self._emit_tts) if mock else Speaker(self._emit_tts, self._settings, on_engine_missing=self._heal_engine)
@@ -97,6 +112,7 @@ class Bridge:
         """Everything the UI needs on startup, in one round trip."""
         s = self._settings
         self._store.prune_empty()
+        self._reminders.start()
         convs = self._store.list()
         installed = self._models.installed()
         mp = s.get("model_path")
@@ -117,6 +133,9 @@ class Bridge:
             "tts_info": ttsmod.engine_info(),
             "app_dir": str(app_dir()),
             "models_dir": str(self._models.dir),
+            "capabilities": self.get_capabilities(),
+            "styles": {k: v[0] for k, v in styles.STYLES.items()},
+            "reply_languages": styles.REPLY_LANGUAGES,
         }
 
     # ------------------------------------------------------------------ settings
@@ -154,6 +173,8 @@ class Bridge:
         snap = self._settings.update(patch)
         if failed:
             snap = dict(snap, startup_error=failed)
+        if patch and any(k in patch for k in ("orb_follow", "orb_sleep", "orb_mood")) and self._native is not None:
+            self._orb_configure()
         if patch and "orb_size" in patch and self._native is not None:
             try:
                 self._native.set_size(self._orb_size())      # resize the orb while it is on screen
@@ -169,6 +190,10 @@ class Bridge:
     def _get_computer(self):
         if self._computer is None:
             self._computer = computer.make()
+        try:
+            self._computer.grants = self._caps            # the live dict: Settings > Capabilities takes effect at once
+        except Exception:                                 # noqa: BLE001
+            pass
         return self._computer
 
     def _orb_size(self) -> int:
@@ -225,6 +250,14 @@ class Bridge:
         if not self._busy.acquire(blocking=False):
             return {"error": "Reo is still answering"}
         msg = self._store.add_message(cid, "user", text)
+        rem = reminders.parse(text)
+        if rem:                                           # "remind me in 10 minutes to ...": the app does it, exactly, without the model
+            threading.Thread(target=self._reminder_reply, args=(cid, text, rem), daemon=True, name="reo-reminder").start()
+            return {"user": msg}
+        sw = reminders.parse_stopwatch(text)
+        if sw:
+            threading.Thread(target=self._stopwatch_reply, args=(cid, text, sw), daemon=True, name="reo-stopwatch").start()
+            return {"user": msg}
         self._start(cid, opts)
         return {"user": msg}
 
@@ -283,8 +316,19 @@ class Bridge:
         parts: list[str] = []
         thought: list[str] = []
         stats: dict = {}
+        t_start, t_first = time.time(), [0.0]
+        engine_name = ""
+
+        def _slow():                         # Capri cancels a turn with no visible text after 30 s; Reo only says it is still working
+            if not t_first[0] and not self._stop.is_set():
+                self._emit(e="notice", conv=cid, text="Still working: the model has not produced any text yet (loading or reading a long prompt).")
+                self._diag.write(event="turn", stage="slow_first", engine=engine_name)
+        watchdog = threading.Timer(self.FIRST_TEXT_NOTICE, _slow)
+        watchdog.daemon = True
+        watchdog.start()
         try:
             engine, notice = self._pick_engine(opts)
+            engine_name = getattr(engine, "name", "")
             conv = self._store.get(cid)
             history = list(conv["messages"])
             sys_prompt = s.get("system_prompt")
@@ -342,7 +386,9 @@ class Bridge:
                     sys_prompt = (sys_prompt or "") + "\n\n[WEB UNAVAILABLE] The internet lookup failed. Say you could not reach the internet and give no invented facts."
             sys_prompt = (sys_prompt or "") + knowledge.note(last_user, bool(cc_on), web_on)
             sys_prompt = (sys_prompt or "") + clock.note(s, lang.of_conversation(user_texts))
-            sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
+            if (s.get("reply_language") or "auto") == "auto":
+                sys_prompt = (sys_prompt or "") + lang.note([m.get("text", "") for m in history if m.get("role") == "user"])
+            sys_prompt = (sys_prompt or "") + styles.note(s)
             params = {k: s.get(k) for k in PARAM_KEYS}
             deep = bool(opts.get("deepThinking", s.get("deepThinking")))
             if not started:
@@ -367,6 +413,8 @@ class Bridge:
                 for ev in eng.stream(lang.tag_last_user(history, user_texts), sys_prompt, params, deep, self._stop):
                     t = ev["t"]
                     if t in ("token", "thought"):
+                        if not t_first[0]:
+                            t_first[0] = time.time()
                         (parts if t == "token" else thought).append(ev["text"])
                         buf[t] += ev["text"]
                         if time.time() - last > 0.035:
@@ -480,18 +528,26 @@ class Bridge:
                 self._emit(e="delta", conv=cid, kind="token", text="\n\n" + sline)
                 shown.append(sline)
             text = "\n\n".join(x for x in shown if x).strip()
+            text, listen = styles.strip_listen(text)
+            if listen and s.get("wake_word") and s.get("wake_follow_up"):
+                self._arm_follow_up()
             if text or thought:
                 msg = self._store.add_message(cid, "bot", text, thought="".join(thought).strip(), stats=stats)
                 mid = msg["id"]
-            self._emit(e="end", conv=cid, mid=mid, stats=stats, conversations=self._store.list())
+            self._emit(e="end", conv=cid, mid=mid, stats=stats, conversations=self._store.list(), listen=bool(listen))
+            self._diag.write(event="turn", ok=True, engine=engine_name, ms_total=(time.time() - t_start) * 1000,
+                             ms_first=((t_first[0] - t_start) * 1000) if t_first[0] else None, chars=len(text), thought_chars=len("".join(thought)),
+                             deep=bool(opts.get("deepThinking")), computer=bool(opts.get("computerControl")))
         except Exception as ex:      # surface everything to the UI
             log.exception("generation failed")
+            self._diag.write(event="turn", ok=False, engine=engine_name, ms_total=(time.time() - t_start) * 1000, error=ex.__class__.__name__)
             text = "\n\n".join([x for x in locals().get("shown", []) if x] + ["".join(parts).strip()]).strip()
             if text:
                 msg = self._store.add_message(cid, "bot", text, thought="".join(thought).strip(), stats=stats)
                 mid = msg["id"]
             self._emit(e="error", conv=cid, mid=mid, message=str(ex) or ex.__class__.__name__)
         finally:
+            watchdog.cancel()
             self._busy.release()
 
     # ------------------------------------------------------------------ models
@@ -728,12 +784,71 @@ class Bridge:
     def stt_cancel(self):
         return self._stt.cancel()
 
+    def install_server(self, kind: str = ""):
+        """Download llama-server (official llama.cpp build) into Reo's folder. Progress arrives as `serverdl` events."""
+        from . import server_install
+        if getattr(self, "_server_busy", False):
+            return {"error": "Already downloading"}
+        if kind not in server_install.KINDS:
+            gpu = (self._hw or hardware.scan(self._models.dir)).get("best_gpu") or {}
+            kind = "cuda" if gpu.get("vendor") == "nvidia" else "vulkan" if gpu else "cpu"
+        self._server_busy = True
+
+        def work():
+            try:
+                server_install.install(lambda **kw: self._emit(e="serverdl", **kw), kind)
+                self._emit(e="serverdl", state="done", message="llama-server is ready. Restart Reo to use it.")
+            except Exception as ex:                                  # noqa: BLE001
+                log.exception("llama-server install failed")
+                self._emit(e="serverdl", state="error", message=str(ex))
+            finally:
+                self._server_busy = False
+        threading.Thread(target=work, daemon=True, name="reo-server-install").start()
+        return {"ok": True, "kind": kind}
+
+    def server_status(self):
+        from . import server_install
+        return {"installed": bool(server_install.exe_path()), "mode": self._settings.get("runtime_mode"),
+                "active": type(self._local).__name__ == "ServerEngine"}
+
     def stt_prepare(self):
         return self._stt.prepare()
+
+    def first_run_setup(self):
+        """One click on first run: start the downloads Reo needs (the recommended model for this computer, the speech
+        model and an offline voice). Everything runs in the background and reports through the usual download events.
+        Returns what was started, e.g. {"model": "<id>", "speech": True, "voice": "<id>"}; a step that fails is skipped."""
+        started: dict = {}
+        try:
+            scan = self.scan_hardware()
+            pick = next((r for r in scan.get("recommendations", []) if r.get("recommended") and r.get("fits")), None)
+            if pick and not any(i.get("file") == pick.get("file") for i in self._models.installed()):
+                r = self.download_model(pick["id"])
+                if not (isinstance(r, dict) and r.get("error")):
+                    started["model"] = pick["id"]
+        except Exception:                                          # noqa: BLE001
+            log.exception("first run: model step failed")
+        try:
+            self.stt_prepare()
+            started["speech"] = True
+        except Exception:                                          # noqa: BLE001
+            log.exception("first run: speech step failed")
+        try:
+            lang = str(self._settings.get("stt_language") or "")
+            key = "es_ES-davefx-medium" if lang == "es" else "en_US-lessac-medium"
+            have = {v.get("id") for v in ttsmod.list_installed_piper()}
+            if key not in have:
+                self.download_voice(key)
+                started["voice"] = key
+        except Exception:                                          # noqa: BLE001
+            log.exception("first run: voice step failed")
+        self._diag.write(event="first_run", count=len(started))
+        return started
 
     def shutdown(self):
         try:
             self._tts.stop()
+            self._diag.close()
             if self._computer is not None:
                 self._computer.end()
             if self._native is not None:
@@ -742,19 +857,35 @@ class Bridge:
             log.debug("shutdown failed", exc_info=True)
 
     # ------------------------------------------------------------------ wake word
+    FOLLOW_SECONDS = 12.0
+    FIRST_TEXT_NOTICE = 30.0      # seconds without any text before Reo says he is still working
+    FOLLOW_MAX = 3
+
+    def _arm_follow_up(self):
+        """A reply ended in ;listen: for 12 s the next sentence needs no wake phrase. At most 3 in a row without hearing the name again."""
+        if self._follow_count < self.FOLLOW_MAX:
+            self._follow_count += 1
+            self._follow_until = time.time() + self.FOLLOW_SECONDS
+
     def wake_check(self, text: str):
-        """Hands-free gate. {ok, command}: ok is False when Reo did not hear his name (and was not just called).
-        Saying only the name ("Hey Reo") opens an 8 second window in which the next sentence needs no name."""
-        found, cmd = wake.extract(text)
+        """Hands-free gate. {ok, command, named}: ok is False when Reo did not hear his wake phrase (and was not just called).
+        Saying only the name ("Hey Reo") opens an 8 second window in which the next sentence needs no name.
+        A reply that ended in ;listen opens a 12 second window (see _arm_follow_up)."""
+        found, cmd = wake.extract(text, str(self._settings.get("wake_phrase") or ""))
         now = time.time()
         if found:
+            self._follow_count = 0
+            self._follow_until = 0.0
             if not cmd:
                 self._awake_until = now + 8.0
-            return {"ok": True, "command": cmd}
+            return {"ok": True, "command": cmd, "named": True}
         if now < self._awake_until:
             self._awake_until = 0.0
-            return {"ok": True, "command": (text or "").strip()}
-        return {"ok": False, "command": ""}
+            return {"ok": True, "command": (text or "").strip(), "named": False}
+        if now < self._follow_until and self._settings.get("wake_follow_up"):
+            self._follow_until = 0.0
+            return {"ok": True, "command": (text or "").strip(), "named": False, "followup": True}
+        return {"ok": False, "command": "", "named": False}
 
     # ------------------------------------------------------------------ spoken replies
     def tts_speak(self, text: str, queue: bool = False):
@@ -812,6 +943,7 @@ class Bridge:
                 else:                                       # until it is moved: the middle of the screen
                     x, y = sx + (sw - d) // 2, sy + (sh - d) // 2
                 n.set_state("idle")
+                self._orb_configure()
                 n.show(x, y)
                 self._orb_on = True
                 w.hide()
@@ -830,8 +962,9 @@ class Bridge:
         try:
             self._tts.stop()
             if n is not None:
-                x, y = n.position()
-                self._settings.update({"orb_pos": [int(x), int(y)]})
+                if not self._settings.get("orb_follow"):          # a trailing orb is wherever the mouse was: keep the dragged spot
+                    x, y = n.position()
+                    self._settings.update({"orb_pos": [int(x), int(y)]})
                 n.hide()
         finally:
             if w is not None:
@@ -848,6 +981,19 @@ class Bridge:
 
     def _orb_moved(self, x, y):
         self._settings.update({"orb_pos": [int(x), int(y)]})
+
+    def _orb_configure(self):
+        n = self._native
+        if n is not None and hasattr(n, "configure"):
+            n.configure(follow=bool(self._settings.get("orb_follow")), sleep=bool(self._settings.get("orb_sleep")),
+                        mood=bool(self._settings.get("orb_mood")))
+
+    def orb_mood(self, text: str):
+        """Pulse the orb a colour matching the reply (called by the page for the orb it shows)."""
+        m = mood.detect(text)
+        if m and self._native is not None and self._orb_on and hasattr(self._native, "set_mood"):
+            self._native.set_mood(m)
+        return m
 
     def orb_state(self, state: str):
         if self._native is not None and self._orb_on:
@@ -992,3 +1138,239 @@ class Bridge:
         except Exception:
             log.exception("file dialog failed")
             return None
+
+    # ------------------------------------------------------------------ reminders and timers
+    def _reminder_reply(self, cid: str, text: str, rem: dict):
+        """Chat message that is a reminder/timer request: store it, answer instantly (no model) and keep the chat flow the UI expects."""
+        try:                                                       # chat() already took the busy lock; released below
+            es = lang.detect(text) == "es"
+            r = self._reminders.add(rem["due"], rem["text"], cid, rem["timer"])
+            wait = reminders.describe_delay(rem["due"] - time.time(), es)
+            at = time.strftime("%H:%M", time.localtime(rem["due"]))
+            if rem["timer"]:
+                reply = f"Temporizador puesto: {wait} (suena a las {at})." if es else f"Timer set: {wait} (rings at {at})."
+            elif es:
+                reply = f"Hecho, te aviso en {wait} (a las {at})" + (f": {rem['text']}." if rem["text"] else ".")
+            else:
+                reply = f"Done, I'll remind you in {wait} (at {at})" + (f": {rem['text']}." if rem["text"] else ".")
+            self._emit(e="start", conv=cid, engine="app")
+            self._emit(e="delta", conv=cid, kind="token", text=reply)
+            msg = self._store.add_message(cid, "bot", reply, stats={"engine": "app"})
+            self._emit(e="end", conv=cid, mid=msg["id"], stats={"engine": "app"}, conversations=self._store.list())
+            self._emit(e="reminders", items=self._reminders.list(), added=r["id"])
+        except Exception as ex:                                     # noqa: BLE001
+            log.exception("reminder failed")
+            self._emit(e="error", conv=cid, mid=None, message=str(ex) or "Could not set the reminder")
+        finally:
+            self._busy.release()
+
+    def _stopwatch_reply(self, cid: str, text: str, action: str):
+        try:                                                       # chat() already took the busy lock; released below
+            es = lang.detect(text) == "es"
+            sw = self._stopwatch
+            if action == "start":
+                was = sw.running
+                sw.start()
+                reply = ("El cronómetro ya está en marcha." if was else "Cronómetro iniciado.") if es else ("The stopwatch is already running." if was else "Stopwatch started.")
+            elif action == "stop":
+                if sw.running:
+                    el = reminders.fmt_elapsed(sw.stop(), es)
+                    reply = f"Cronómetro parado en {el}." if es else f"Stopwatch stopped at {el}."
+                else:
+                    reply = "El cronómetro no está en marcha." if es else "The stopwatch is not running."
+            elif action == "reset":
+                sw.reset()
+                reply = "Cronómetro a cero." if es else "Stopwatch reset."
+            else:
+                el = reminders.fmt_elapsed(sw.read(), es)
+                if sw.running:
+                    reply = f"El cronómetro lleva {el}." if es else f"The stopwatch is at {el}."
+                elif sw.elapsed:
+                    reply = f"El cronómetro está parado en {el}." if es else f"The stopwatch is stopped at {el}."
+                else:
+                    reply = "No hay ningún cronómetro en marcha." if es else "No stopwatch is running."
+            self._emit(e="start", conv=cid, engine="app")
+            self._emit(e="delta", conv=cid, kind="token", text=reply)
+            msg = self._store.add_message(cid, "bot", reply, stats={"engine": "app"})
+            self._emit(e="end", conv=cid, mid=msg["id"], stats={"engine": "app"}, conversations=self._store.list())
+            self._emit(e="stopwatch", **sw.state())
+        except Exception as ex:                                     # noqa: BLE001
+            log.exception("stopwatch failed")
+            self._emit(e="error", conv=cid, mid=None, message=str(ex) or "Could not use the stopwatch")
+        finally:
+            self._busy.release()
+
+    def stopwatch(self, action: str = "read"):
+        """Settings/button access: action start | stop | reset | read. Returns {running, elapsed}."""
+        sw = self._stopwatch
+        if action == "start":
+            sw.start()
+        elif action == "stop":
+            sw.stop()
+        elif action == "reset":
+            sw.reset()
+        return sw.state()
+
+    def snooze_reminder(self, text: str = "", cid: str = "", timer: bool = False, minutes: float = 5):
+        mins = max(1.0, min(float(minutes or 5), 1440.0))
+        r = self._reminders.add(time.time() + mins * 60, text, cid, timer=bool(timer))
+        self._emit(e="reminders", items=self._reminders.list(), added=r["id"])
+        return {"reminder": r, "items": self._reminders.list()}
+
+    def pause_reminder(self, rid: str):
+        self._reminders.pause(rid)
+        return self._reminders.list()
+
+    def resume_reminder(self, rid: str):
+        self._reminders.resume(rid)
+        return self._reminders.list()
+
+    def _reminder_due(self, r: dict):
+        es = lang.detect(r.get("text", "")) == "es"
+        what = r.get("text") or ""
+        if r.get("timer"):
+            text = "Se acabó el tiempo del temporizador." if es else "Your timer is done."
+        else:
+            text = ("Recordatorio: " if es else "Reminder: ") + what
+        mid = None
+        cid = r.get("cid") or ""
+        try:
+            if cid and self._store.get(cid):
+                mid = self._store.add_message(cid, "bot", text, stats={"engine": "app"})["id"]
+        except Exception:                                          # noqa: BLE001
+            log.exception("could not store reminder message")
+        self._emit(e="reminder", conv=cid, mid=mid, text=text, what=what, timer=bool(r.get("timer")), items=self._reminders.list(), conversations=self._store.list())
+
+    def list_reminders(self):
+        return self._reminders.list()
+
+    def add_reminder(self, text: str, minutes: float = 10, cid: str = ""):
+        try:
+            mins = float(minutes)
+        except (TypeError, ValueError):
+            return {"error": "Minutes must be a number"}
+        if not (0 < mins <= 60 * 24 * 30):
+            return {"error": "Choose between 1 minute and 30 days"}
+        text = (text or "").strip()
+        r = self._reminders.add(time.time() + mins * 60, text, cid, timer=not text)
+        return {"reminder": r, "items": self._reminders.list()}
+
+    def delete_reminder(self, rid: str):
+        self._reminders.delete(rid)
+        return self._reminders.list()
+
+    # ------------------------------------------------------------------ capabilities (per session)
+    def get_capabilities(self):
+        return {"grants": dict(self._caps), "labels": dict(computer.CAPABILITIES)}
+
+    def set_capability(self, key: str, on: bool):
+        if key not in self._caps:
+            return {"error": "Unknown capability"}
+        self._caps[key] = bool(on)
+        return self.get_capabilities()
+
+    # ------------------------------------------------------------------ app controls
+    def minimize_window(self):
+        try:
+            if self._window is not None:
+                self._window.minimize()
+                return True
+        except Exception:                                          # noqa: BLE001
+            log.exception("minimize failed")
+        return False
+
+    def sleep_app(self):
+        """Release the model and the microphone/voice, and minimise. Nothing is deleted; load the model again from the chip when needed."""
+        try:
+            self._stop.set()
+            self._tts.stop()
+            self._stt.cancel() if hasattr(self._stt, "cancel") else None
+            if getattr(self._local, "loaded", False):
+                self._local.unload()
+                self._emit(e="model", **self._model_status())
+        except Exception:                                          # noqa: BLE001
+            log.exception("sleep failed")
+        self.minimize_window()
+        return {"ok": True, "model": self._model_status()}
+
+    def quit_app(self):
+        self.shutdown()
+        if self._window is not None:
+            try:
+                self._window.destroy()
+            except Exception:                                      # noqa: BLE001
+                log.exception("quit failed")
+        return {"ok": True}
+
+    def delete_all_conversations(self):
+        for c in self._store.list():
+            self._store.delete(c["id"])
+        conv = self._store.create()
+        return {"conversation": conv, "conversations": self._store.list()}
+
+    # ------------------------------------------------------------------ support
+    def bug_report(self, note: str = ""):
+        """Write a diagnostics text file (no messages, keys or prompt) and return its path and text."""
+        try:
+            text = support.build(self._settings.snapshot(), self._hw, self._runtime(), app_dir() / "reo.log", note, events=self._diag.tail(40))
+            d = app_dir() / "reports"
+            d.mkdir(exist_ok=True)
+            p = d / time.strftime("report-%Y%m%d-%H%M%S.txt")
+            p.write_text(text, encoding="utf-8")
+            return {"path": str(p), "text": text}
+        except Exception as e:                                     # noqa: BLE001
+            log.exception("bug report failed")
+            return {"error": str(e)}
+
+    def context_usage(self, cid: str = ""):
+        """Rough share of the context window used by the system prompt and this conversation (about 3.6 characters per token)."""
+        n_ctx = int(self._settings.get("n_ctx") or 4096)
+        conv = self._store.get(cid) if cid else None
+        chars = len(self._settings.get("system_prompt") or "") + sum(len(m.get("text", "")) for m in (conv or {}).get("messages", []))
+        used = int(chars / 3.6)
+        return {"used": used, "max": n_ctx, "percent": min(100, round(used * 100 / n_ctx))}
+
+    # ------------------------------------------------------------------ wake acknowledgement audio
+    _ACK_EXT = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".flac": "audio/flac"}
+
+    def pick_ack_audio(self):
+        path = self._dialog("open", "", ("Audio (*.wav;*.mp3;*.ogg;*.m4a;*.flac)",))
+        if not path:
+            return {"cancelled": True}
+        return self.set_ack_audio(path)
+
+    def set_ack_audio(self, path: str):
+        p = Path(path)
+        ext = p.suffix.lower()
+        if ext not in self._ACK_EXT or not p.is_file():
+            return {"error": "Choose a .wav, .mp3, .ogg, .m4a or .flac file."}
+        if p.stat().st_size > 4 * 1024 * 1024:
+            return {"error": "The file is larger than 4 MB. Choose a short sound."}
+        import shutil
+        for old in app_dir().glob("ack_audio.*"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        dest = app_dir() / ("ack_audio" + ext)
+        shutil.copyfile(p, dest)
+        self._settings.update({"ack_audio": dest.name, "wake_ack": "custom"})
+        return {"ok": True, "name": p.name}
+
+    def get_ack_audio(self):
+        """The chosen sound as a data: URL ('' when none). The page checks its length (10 s) before using it."""
+        import base64
+        name = self._settings.get("ack_audio") or ""
+        f = app_dir() / name if name else None
+        if not f or not f.is_file():
+            return ""
+        return f"data:{self._ACK_EXT.get(f.suffix.lower(), 'audio/wav')};base64," + base64.b64encode(f.read_bytes()).decode()
+
+    def clear_ack_audio(self):
+        for old in app_dir().glob("ack_audio.*"):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        self._settings.update({"ack_audio": "", "wake_ack": "voice"})
+        return True

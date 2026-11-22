@@ -300,10 +300,12 @@ def test_wake_word_extraction_and_awake_window(home, monkeypatch):
     assert wake.extract("Reo") == (True, "")
     assert wake.extract("what is the weather") == (False, "")
     b, _, _ = make_bridge(monkeypatch)
-    assert b.wake_check("nobody called me") == {"ok": False, "command": ""}
-    assert b.wake_check("Hey Reo") == {"ok": True, "command": ""}                 # just the name: listen for the next sentence
-    assert b.wake_check("turn it up") == {"ok": True, "command": "turn it up"}
-    assert b.wake_check("and this one") == {"ok": False, "command": ""}           # the window closes after one sentence
+    ok = lambda r: {"ok": r["ok"], "command": r["command"]}                       # `named` / `followup` are extra fields for the UI
+    assert ok(b.wake_check("nobody called me")) == {"ok": False, "command": ""}
+    r = b.wake_check("Hey Reo")
+    assert ok(r) == {"ok": True, "command": ""} and r["named"]                    # just the name: listen for the next sentence
+    assert ok(b.wake_check("turn it up")) == {"ok": True, "command": "turn it up"}
+    assert ok(b.wake_check("and this one")) == {"ok": False, "command": ""}       # the window closes after one sentence
 
 
 def test_computer_actions_parse_and_keys():

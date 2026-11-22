@@ -111,7 +111,7 @@ _LEAD = (r"(?:please|pls|plz|por favor|porfa|can you|could you|would you|will yo
 _START = rf"(?:^|[.!?¿¡;:,\n])\s*(?:{_LEAD}[,:]?\s+)*"
 _SITE = r"(?=[^.!?\n]{0,60}?(?:https?://|\b[\w-]+\.(?:com|org|net|es|io|tv|gg|app|dev|co|me|ai|edu|gov|info)\b))"
 _VERB = (
-    r"(?:kill|quit|exit(?!\s+(?:code|status|strategy|plan|polls?|interview))|terminate|force[- ]?quit|mata|matar|open(?!\s*(?:source\b|up\b|ai\b|minded\b|-|world\b))|launch|click|double[- ]?click|right[- ]?click|minimi[sz]e|maximi[sz]e|"
+    r"(?:kill|quit|exit(?!\s+(?:code|status|strategy|plan|polls?|interview))|terminate|force[- ]?quit|mata|matar|open(?!\s*(?:source\b|up\b|ai\b|minded\b|-|world\b|question|ended|mic\b|letter|discussion))|launch|click|double[- ]?click|right[- ]?click|minimi[sz]e|maximi[sz]e|"
     r"scroll|drag|close(?!\s+(?:to|by|enough|friends?|call|up|together)\b)|press|type(?!\s+of\b)|"
     r"(?:go to|navigate to|browse to)\s+(?:the\s+)?(?:site\s+|page\s+|website\s+)?" + _SITE + r"|"
     r"abre|abrir|[aá]breme|abrime|abras|lanza|lanzar|cierra|cerrar|cierres|minimiza|maximiza|haz\s+(?:un\s+|doble\s+)?(?:clic|click)|"
@@ -133,6 +133,9 @@ _ELSE = [re.compile(p, re.I) for p in (
     r"\b(?:run|ejecuta)\b[^.\n]{0,60}\b(?:in|en)\s+(?:the\s+|el\s+|la\s+)?(?:cmd|powershell|terminal|consola|shell)\b",
     r"\b(?:read|lee|leer)\s+(?:the\s+|el\s+|este\s+|ese\s+)?(?:file|archivo|fichero)\b",
     r"\b(?:clipboard|portapapeles)\b",
+    r"^\s*(?:please\s+|por favor\s+)?(?:focus|enfoca|activa)\s+(?:on\s+)?(?:the\s+|el\s+|la\s+)?(?:window\s+|ventana\s+)?(?:chrome|firefox|edge|brave|notepad|bloc de notas|discord|spotify|steam|obs|vlc|explorer|terminal|cmd|powershell)\b",
+    r"\b(?:list|lista|listar)\s+(?:all\s+|me\s+|the\s+|las\s+|mis\s+|todas\s+las\s+)?(?:open\s+|abiertas\s+)?(?:windows|ventanas)\b",
+    r"\b(?:move|mueve|mover)\s+(?:the\s+|my\s+|el\s+|mi\s+)?(?:mouse|cursor|rat[oó]n)\b",
     r"\b(?:what|which|qu[eé]|cu[aá]les)\b[^.?!\n]*\b(?:windows|ventanas|apps|aplicaciones|programas)\b[^.?!\n]*\b(?:open|opened|abiert[oa]s?|running)\b",
     r"\b(?:show|send|make)\s+(?:me\s+)?a\s+notification\b|\b(?:mu[eé]strame|env[ií]ame|haz)\s+una\s+notificaci[oó]n\b",
 )]
@@ -196,6 +199,27 @@ def parse_actions(text: str) -> tuple[list[dict], str]:
         except ValueError:
             acts.append({"do": "_invalid", "raw": raw[:120]})
     return acts, _ACTION_RE.sub("", text or "").strip()
+
+
+# Per-session permissions (Settings > Capabilities). Computer Control itself is the master switch; these narrow what it may touch.
+CAPABILITIES = {"apps": "Applications and windows", "input": "Mouse and keyboard", "clipboard": "Clipboard",
+                "files": "Files", "shell": "Command line"}
+CAPABILITY_DEFAULTS = {"apps": True, "input": True, "clipboard": True, "files": False, "shell": False}      # off again at every launch
+
+
+def capability_of(do: str) -> str:
+    do = (do or "").lower()
+    if do == "shell.run":
+        return "shell"
+    if do.startswith("file."):
+        return "files"
+    if do.startswith("clipboard."):
+        return "clipboard"
+    if do in ("move", "click", "double_click", "right_click", "scroll", "drag", "type", "key", "hotkey"):
+        return "input"
+    if do.startswith("app.") or do.startswith("browser.") or do in ("focus", "open", "windows"):
+        return "apps"
+    return ""
 
 
 _PROTECTED = {"system", "idle", "registry", "smss", "csrss", "wininit", "winlogon", "services", "lsass", "svchost", "explorer", "dwm",
@@ -1090,6 +1114,9 @@ class WinComputer:
         do = str(a.get("do", "")).lower()
         try:
             self._check()
+            cap = capability_of(do)
+            if cap and not (getattr(self, "grants", None) or {}).get(cap, True):
+                return f"BLOCKED - '{do}' needs the '{CAPABILITIES[cap]}' permission, which is off. Tell the user to allow it in Settings > Capabilities."
             # ---- semantic
             if do == "app.open":
                 return self.app_open(a.get("name") or a.get("target") or "")

@@ -15,14 +15,29 @@ def _norm(tok: str) -> str:
     return re.sub(r"[^a-z\-]", "", t)
 
 
-def extract(text: str) -> tuple[bool, str]:
-    """(heard_name, command). The name, and a greeting right before it, are removed from the command."""
+def _custom(phrase: str) -> list[str] | None:
+    """Tokens of a user-chosen wake phrase, or None when the phrase is the default "Reo"."""
+    toks = [t for t in (_norm(w) for w in re.findall(r"\S+", phrase or "")) if t]
+    if not toks or toks == ["reo"]:
+        return None
+    return toks
+
+
+def extract(text: str, phrase: str = "") -> tuple[bool, str]:
+    """(heard_name, command). The name, and a greeting right before it, are removed from the command.
+    `phrase` is the wake phrase from Settings; empty or "Reo" uses the built-in spellings Whisper tends to produce."""
     words = re.findall(r"\S+", text or "")
     norm = [_norm(w) for w in words]
-    idx = next((i for i, n in enumerate(norm) if n in NAMES), None)
+    toks = _custom(phrase)
+    span = 1
+    if toks is None:
+        idx = next((i for i, n in enumerate(norm) if n in NAMES), None)
+    else:
+        span = len(toks)
+        idx = next((i for i in range(len(norm) - span + 1) if norm[i:i + span] == toks), None)
     if idx is None:
         return False, ""
-    drop = {idx}
+    drop = set(range(idx, idx + span))
     if idx > 0 and norm[idx - 1] in GREETINGS:
         drop.add(idx - 1)
     rest = [w for i, w in enumerate(words) if i not in drop]

@@ -7,6 +7,14 @@ from playwright.sync_api import sync_playwright, expect
 SHOTS = os.environ.get("REO_SHOTS", "")
 
 
+def open_settings(page, cat=None):
+    page.evaluate("document.getElementById('settingsBtn').click()")
+    page.wait_for_selector("#settingsContent")
+    if cat:
+        page.click(f".settings-nav .cat[data-cat={cat}]")
+
+
+
 @pytest.fixture()
 def page(ui_server):
     url, bridge = ui_server
@@ -144,7 +152,7 @@ def test_api_and_settings_persist(page):
     assert s["provider"] == "anthropic" and s["cloud_model"] == "claude-sonnet-5-5"
     assert s["api_key"] == "" and s["api_key_set"] is True      # the key is never sent back to the page
     shot(page, "api")
-    page.click(".tab[data-panel=settings]")
+    open_settings(page)
     page.fill("textarea.in", "You are a pirate.")
     page.wait_for_timeout(700)
     assert page.bridge.get_settings()["system_prompt"] == "You are a pirate."
@@ -163,11 +171,11 @@ def test_attach_file_and_phone_layout(page):
 
 
 def test_compute_setting_and_gold_gradient(page):
-    page.click("#trayLine"); page.click("#menuBtn"); page.click("[data-panel=settings]")
+    open_settings(page, "model")
     page.select_option("select[aria-label='Run the model on']", "gpu")
     page.wait_for_timeout(500)
     assert page.bridge.get_settings()["compute"] == "gpu"
-    page.click(".tab[data-panel=models]")
+    page.click("#panelClose"); page.click("#modelChip")
     page.wait_for_selector(".model-row .badge.gold", timeout=15000)
     bg = page.evaluate("getComputedStyle(document.querySelector('.btn.primary')).backgroundImage")
     assert "linear-gradient" in bg and "246, 220, 130" in bg           # solid-gold buttons use the gold gradient
@@ -175,7 +183,8 @@ def test_compute_setting_and_gold_gradient(page):
     assert "linear-gradient" in bg
     assert page.evaluate("getComputedStyle(document.querySelector('#send')).backgroundImage").count("linear-gradient") == 1
     shot(page, "models2")
-    page.click(".tab[data-panel=settings]")
+    page.click("#panelClose")
+    open_settings(page)
     shot(page, "settings")
 
 
@@ -201,7 +210,7 @@ def test_microphone_menu_and_speech_settings(page):
     page.click("#trayLine"); page.click("#menuBtn")
     page.click("#micSelect")
     expect(page.locator("#micList")).to_contain_text("Mock microphone")
-    page.click("[data-panel=settings]")
+    open_settings(page, "voice")
     expect(page.locator(".card h3", has_text="Speech input")).to_be_visible()
     page.select_option("select[aria-label='Speech model']", "small")
     page.wait_for_timeout(300)
@@ -243,7 +252,7 @@ def test_cloud_button_and_computer_control_switch(page):
 
 def test_orb_size_in_settings(page):
     page.click("#trayLine"); page.click("#menuBtn")
-    page.click("[data-panel=settings]")
+    open_settings(page, "orb")
     expect(page.locator(".card h3", has_text="Orb")).to_be_visible()
     page.locator("input[type=range]").first.evaluate("e => 1")   # panel rendered
 
@@ -378,31 +387,26 @@ def test_menu_has_volume_slider_and_pronunciation_rules(page):
     assert _inside(page, "#pronRules", ".menu-dialog") and _inside(page, "#volumeRange", ".menu-dialog")
 
 
-def test_switches_keep_their_state_when_settings_reopen(page):
-    def open_settings():
-        if not page.locator("#menuBtn").is_visible():
-            page.click("#trayLine")
-        page.click("#menuBtn"); page.click("[data-panel=settings]")
-    open_settings()
-    sw = page.locator(".switch", has_text="Only answer when I say")
+def test_tray_switches_keep_their_state_and_follow_settings(page):
+    page.click("#trayLine")
+    sw = page.locator(".tray .switch", has_text="Wake word only")
     assert sw.get_attribute("aria-checked") == "true"                       # default on is shown as on
-    page.locator(".switch", has_text="Only answer when I say").click()
-    page.wait_for_timeout(300)
+    sw.click(); page.wait_for_timeout(300)
     assert page.bridge.get_settings()["wake_word"] is False
+    open_settings(page, "voice")
     page.click("#panelClose")
-    open_settings()
-    assert page.locator(".switch", has_text="Only answer when I say").get_attribute("aria-checked") == "false"
-
-
-def test_read_aloud_toggle_is_for_normal_mode_and_persists(page):
-    if not page.locator("#menuBtn").is_visible():
-        page.click("#trayLine")
-    page.click("#menuBtn"); page.click("[data-panel=settings]")
-    assert page.locator(".switch", has_text="Read replies aloud in normal mode").get_attribute("aria-checked") == "false"
-    assert page.locator(".switch", has_text="orb mode").count() == 0                  # no way to turn orb speech off
-    page.locator(".switch", has_text="Read replies aloud in normal mode").click()
-    page.wait_for_timeout(300)
+    assert page.locator(".tray .switch", has_text="Wake word only").get_attribute("aria-checked") == "false"
+    ra = page.locator(".tray .switch", has_text="Read aloud")
+    assert ra.get_attribute("aria-checked") == "false"
+    ra.click(); page.wait_for_timeout(300)
     assert page.bridge.get_settings()["speak_replies"] is True
+    assert page.locator(".switch", has_text="orb mode").count() == 0
+    page.select_option("#styleSel", "business"); page.wait_for_timeout(500)
+    assert page.bridge._settings.get("comm_style") == "business"
+    page.fill("#qrText", "tea"); page.fill("#qrMins", "3"); page.click("#qrAdd")
+    page.wait_for_timeout(300)
+    assert [r["text"] for r in page.bridge.list_reminders()] == ["tea"]
+    assert page.locator("#ctxChip").text_content().startswith("CTX")
 
 
 def test_normal_mode_reads_the_reply_while_it_streams_without_repeating_text(page):
@@ -433,7 +437,7 @@ def test_computing_banner_shows_and_hides_with_events(page):
 def test_show_actions_toggle_in_settings(page):
     if not page.locator("#menuBtn").is_visible():
         page.click("#trayLine")
-    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    open_settings(page, "computer")
     sw = page.locator(".switch", has_text="Show actions (debug)")
     assert sw.get_attribute("aria-checked") == "false"
     sw.click(); page.wait_for_timeout(300)
@@ -443,7 +447,7 @@ def test_show_actions_toggle_in_settings(page):
 def test_clock_and_startup_cards_in_settings(page):
     if not page.locator("#menuBtn").is_visible():
         page.click("#trayLine")
-    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    open_settings(page, "general")
     expect(page.locator("#clockLive")).to_contain_text("Reo thinks it is")
     page.select_option("#clockMode", "manual")
     page.fill("#clockManual", "2031-03-04T12:30"); page.click("#clockApply")
@@ -456,7 +460,7 @@ def test_clock_and_startup_cards_in_settings(page):
 def test_internet_access_toggle_saves(page):
     if not page.locator("#menuBtn").is_visible():
         page.click("#trayLine")
-    page.click("#menuBtn"); page.click("[data-panel=settings]")
+    open_settings(page, "general")
     sw = page.locator(".switch", has_text="Internet access")
     assert sw.get_attribute("aria-checked") == "false"                       # tests switch it off; the product default is on (test_web)
     sw.click(); page.wait_for_timeout(300)
@@ -480,3 +484,104 @@ def test_files_over_200kb_are_accepted_and_cut_by_python(page, tmp_path):
     page.set_input_files("#fileInput", str(f))
     expect(page.locator(".file-chip")).to_contain_text("big.pdf.txt")
     expect(page.locator("#toasts, .toast").first).not_to_contain_text("larger than 200 KB")
+
+
+def test_long_conversation_renders_a_window_and_loads_earlier(page):
+    conv = page.bridge.new_conversation()
+    for i in range(450):
+        page.bridge._store.add_message(conv["id"], "user" if i % 2 == 0 else "bot", f"message {i}")
+    page.reload()
+    page.wait_for_selector("#status:has-text('Ready')")
+    assert page.locator("#messages .msg").count() <= 201                      # greeting + newest 200
+    expect(page.locator(".show-earlier")).to_be_visible()
+    page.click(".show-earlier")
+    assert page.locator("#messages .msg").count() > 201
+
+
+
+def test_capri_settings_cards(page):
+    open_settings(page, "chat")
+    page.wait_for_selector("#convCard")
+    page.select_option("#convCard select >> nth=0", "es")
+    page.wait_for_timeout(500)
+    assert page.bridge._settings.get("reply_language") == "es"
+    open_settings(page, "general")
+    page.fill("#remText", "call Ana"); page.fill("#remMins", "5"); page.click("#remAdd")
+    page.wait_for_selector("#reminderList .row")
+    assert len(page.bridge.list_reminders()) == 1
+    page.click("#reminderList .row .del")
+    page.wait_for_selector("#reminderList .hint2")
+    assert page.bridge.list_reminders() == []
+    open_settings(page, "computer")
+    page.wait_for_selector("#capBox .switch")
+    assert page.locator("#capBox .switch").count() >= 3
+    page.fill("#settingsSearch", "reminders")
+    assert page.locator("#remCard").is_visible() and page.locator("#convCard").count() == 0
+    page.fill("#settingsSearch", "zzzz-nothing")
+    expect(page.locator("#settingsContent")).to_contain_text("No settings match")
+
+
+def test_settings_layout_gear_and_menu(page):
+    assert page.locator("#menuBody [data-panel=settings]").count() == 0          # no longer in the Menu
+    assert page.locator("#panelTabs .tab[data-panel=settings]").count() == 0
+    assert page.locator("#drawer #settingsBtn").count() == 1
+    open_settings(page)
+    assert page.locator("#panelTabs").is_hidden()
+    cats = page.locator(".settings-nav .cat").all_text_contents()
+    assert cats == ["Chat", "Model", "Voice", "Computer", "Orb", "General", "App"]
+    page.click(".settings-nav .cat[data-cat=app]")
+    expect(page.locator("#bugBtn")).to_be_visible()
+    page.click("#panelClose")
+    page.click("#modelChip")
+    assert page.locator("#panelTabs").is_visible()
+
+
+def test_listen_tag_is_never_shown(page):
+    page.evaluate("window.reoEvent({e:'start', conv: document.title && '', mid:'x'})")
+    cur = page.bridge.new_conversation()
+    page.reload(); page.wait_for_selector("#status:has-text('Ready')")
+    page.evaluate("""cid => { window.reoEvent({e:'start', conv: cid, mid:'m1'}); window.reoEvent({e:'delta', conv: cid, text:'Which one? ;lis'}); }""", cur["id"])
+    page.wait_for_timeout(200)
+    assert ";" not in page.locator("#messages .msg").last.text_content()
+
+
+def test_orb_extras_toggles_and_in_page_follow(page):
+    open_settings(page, "orb")
+    for label in ("Follow the mouse", "Sleep look", "Mood pulse"):
+        assert page.locator(f".switch:has-text('{label}')").count() == 1
+    page.click(".switch:has-text('Follow the mouse')")
+    page.wait_for_timeout(500)
+    assert page.bridge._settings.get("orb_follow") is True
+    page.keyboard.press("Escape")
+    page.click("#orbBtn")
+    page.wait_for_selector("body.orb-mode")
+    page.mouse.move(100, 100); page.mouse.move(120, 130)
+    page.wait_for_timeout(900)
+    fx = page.evaluate("getComputedStyle(document.getElementById('orbWrap')).getPropertyValue('--fx')")
+    assert fx and fx.strip().endswith("px") and abs(float(fx.strip()[:-2])) > 5
+
+
+def test_stopwatch_pause_snooze_and_runtime_select(page):
+    open_settings(page, "general")
+    page.wait_for_selector("#stopwatchBox #swStart")
+    page.click("#swStart")
+    page.wait_for_selector("#swStop")
+    assert page.bridge.stopwatch("read")["running"] is True
+    page.click("#swStop"); page.wait_for_selector("#swStart")
+    page.click("#swReset")
+    page.fill("#remText", "tea"); page.fill("#remMins", "7"); page.click("#remAdd")
+    page.wait_for_selector("#reminderList .pause")
+    page.click("#reminderList .pause")
+    page.wait_for_selector("#reminderList .pause:has-text('Resume')")
+    assert page.bridge.list_reminders()[0]["paused"] is True
+    page.click("#reminderList .pause")
+    page.wait_for_selector("#reminderList .pause:has-text('Pause')")
+    page.evaluate("window.reoEvent({e:'reminder', conv:'', mid:'', text:'Reminder: tea', what:'tea', timer:false, items:[], conversations:[]})")
+    page.click("#snoozeBtn")
+    page.wait_for_timeout(300)
+    assert len(page.bridge.list_reminders()) == 2
+    open_settings(page, "model")
+    page.select_option("#runtimeSel", "server")
+    page.wait_for_selector("#serverDl")
+    assert page.bridge._settings.get("runtime_mode") == "server"
+    page.select_option("#runtimeSel", "builtin")

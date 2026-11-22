@@ -381,7 +381,9 @@ DEFAULTS: dict = {
     # --- local model
     "model_path": "",            # last loaded GGUF
     "autoload": True,            # load model_path on startup
-    "n_ctx": 4096,
+    "n_ctx": 8192,               # Capri found that its mandatory prompt did not fit small windows; Reo with Computer Control needs about 3,000 tokens of instructions
+    "runtime_mode": "builtin",   # builtin = llama.cpp inside Reo | server = Reo manages a hidden llama-server (like Capri); applies after a restart
+    "ctx_migrated": False,       # the old shipped default (4096) is raised to 8192 once
     "compute": "auto",           # "auto" | "gpu" (graphics card) | "cpu" (processor only)
     "n_gpu_layers": -1,          # advanced override: -1 = decided by `compute` and the hardware scan
     "n_threads": 0,              # 0 = auto
@@ -410,7 +412,19 @@ DEFAULTS: dict = {
     "stt_model": "base",         # Whisper size: tiny | base | small | medium
     "stt_language": "auto",      # "auto" or a language code such as "en", "es"
     "wake_word": True,           # hands-free / orb: only answer after hearing "Reo", "Hey Reo", "Hello Reo"
+    "wake_phrase": "Reo",        # the name Reo listens for (any word or short phrase)
+    "wake_follow_up": True,      # a reply that ends in the hidden ;listen tag keeps the microphone open for 12 s (max 3 in a row)
+    "wake_ack": "voice",         # what Reo does when he hears only his name: "voice" | "tone" | "custom" (own audio file) | "silent"
+    "ack_phrase": "Yes?",
+    "ack_volume": 60,            # 0-100, for the tone and your own audio file
+    "ack_audio": "",             # file name of the chosen audio inside the Reo data folder
+    "comm_style": "neutral",     # neutral | romantic | business | wild (see styles.py)
+    "brief_replies": False,      # one or two sentences for simple messages
+    "reply_language": "auto",    # "auto" follows the user; or a code such as "en", "es", "fr"
     "speak_replies": False,      # read replies aloud in normal chat mode (orb mode always speaks)
+    "orb_follow": False,         # the floating orb trails the mouse cursor
+    "orb_sleep": True,           # the orb dims and breathes slowly after 90 s of nothing
+    "orb_mood": True,            # the orb pulses a colour that matches the tone of a reply
     "orb_pos": [],               # [x, y] where the floating orb was last left
     "voice": "",
     "web_access": DEFAULT_WEB_ACCESS,          # Reo may search the web when a message asks for something online (internet needed)
