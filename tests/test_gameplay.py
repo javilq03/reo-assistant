@@ -40,6 +40,9 @@ class FakeWindow:
         self.fg = True
         self.pointer = None
         self.keys = []
+        self.hits = []                 # registered-hotkey presses (what RegisterHotKey delivers)
+        self.armed, self.arm_ok, self.arm_calls = False, True, 0
+        self.warning = ""
 
     def find(self): return True
     def valid(self): return True
@@ -58,6 +61,10 @@ class FakeWindow:
 
     def cursor_norm(self): return self.pointer
     def key_down(self, vk): return self.keys.pop(0) if self.keys else False
+    def arm_hotkey(self): self.arm_calls += 1; self.armed = self.arm_ok; return self.arm_ok
+    def disarm_hotkey(self): self.armed = False
+    def hotkey_hit(self): return self.hits.pop(0) if self.hits else False
+    def elevation_warning(self): return self.warning
 
 
 class Clock:
@@ -349,6 +356,23 @@ def test_wait_point_times_out_and_ignores_pointer_outside_the_window():
     assert wait_point(w, threading.Event(), timeout=2, sleep=clock.sleep, now=clock.now) is None
 
 
+def test_wait_point_accepts_a_registered_hotkey_when_polling_sees_nothing():
+    w = FakeWindow([])
+    w.keys = []                                      # GetAsyncKeyState-style polling never sees F8 (game has the input)
+    w.hits = [False, True]
+    w.pointer = (0.4, 0.6)
+    clock = Clock()
+    assert wait_point(w, threading.Event(), timeout=5, sleep=clock.sleep, now=clock.now) == (0.4, 0.6)
+
+
+def test_hotkey_press_with_the_pointer_outside_the_game_is_ignored():
+    w = FakeWindow([])
+    w.hits = [True, True]
+    w.pointer = None
+    clock = Clock()
+    assert wait_point(w, threading.Event(), timeout=2, sleep=clock.sleep, now=clock.now) is None
+
+
 def make_manager(store, window, ask=lambda *a: "{}"):
     events = []
     m = GameplayManager(lambda **e: events.append(e), lambda: None, lambda: ask, store=store, window_factory=lambda t: window, sleep=lambda s: None)
@@ -386,6 +410,91 @@ def test_calibrating_a_screen_saves_a_template_from_the_live_window(store):
     cfg = store.screens("tg")["victory2"]
     assert cfg["region"] == [0.0, 0.0, 0.25, 0.25] and store.template_path("tg", "victory2").is_file()
     assert ScreenDetector(store, "tg").classify(frame("victory"))[0] in ("victory", "victory2")
+
+
+def test_calibration_uses_the_hotkey_and_always_releases_it(store):
+    w = FakeWindow(["battle_ready"])
+    w.hits = [True]
+    w.pointer = (0.3, 0.9)
+    m = make_manager(store, w)
+    m.calibrate("tg", "target", "ultimate")
+    wait_idle(m)
+    assert store.coords("tg")["ultimate"] == [0.3, 0.9]            # found with polling dead: only the hotkey fired
+    assert w.arm_calls == 1 and w.armed is False
+
+
+def test_f8_owned_by_another_program_is_reported_but_polling_still_works(store):
+    w = FakeWindow(["battle_ready"])
+    w.arm_ok = False
+    w.keys = [False, True, False]
+    w.pointer = (0.1, 0.2)
+    m = make_manager(store, w)
+    m.calibrate("tg", "target", "ultimate")
+    wait_idle(m)
+    assert store.coords("tg")["ultimate"] == [0.1, 0.2]
+    assert any(e["kind"] == "log" and "using F8" in e["text"] for e in m.events)
+
+
+def test_game_running_as_administrator_is_called_out(store):
+    w = FakeWindow(["battle_ready"])
+    w.warning = "The game is running as administrator and Reo is not."
+    w.hits = [True]
+    w.pointer = (0.5, 0.5)
+    m = make_manager(store, w)
+    m.calibrate("tg", "target", "ultimate")
+    wait_idle(m)
+    assert any(e["kind"] == "log" and "administrator" in e["text"] for e in m.events)
+
+
+def test_missing_f8_explains_what_to_try(store):
+    w = FakeWindow(["battle_ready"])
+    m = make_manager(store, w)
+    m.point_timeout = 0.05
+    m.calibrate("tg", "target", "ultimate")
+    wait_idle(m)
+    last = m.events[-1]
+    assert last["phase"] == "failed" and "did not see F8" in last["error"] and "administrator" in last["error"]
+    assert "ultimate" not in store.coords("tg")
+    assert w.armed is False
+
+
+def test_screen_capture_brings_the_game_to_the_front_first(store):
+    """F8 pressed while Reo had focus used to end in 'the game was not in front when capturing'."""
+    w = FakeWindow(["victory"])
+    pts = iter([(0.0, 0.0), (0.25, 0.25)])
+
+    def cursor():
+        p = next(pts)
+        if p == (0.25, 0.25):
+            w.fg = False                                   # Reo took the focus when the user clicked it
+        return p
+    w.cursor_norm = cursor
+    w.hits = [True, True]
+    m = make_manager(store, w)
+    assert m.calibrate("tg", "screen", "victory2") == {"ok": True}
+    wait_idle(m)
+    assert m.events[-1]["phase"] == "done"
+    assert store.template_path("tg", "victory2").is_file()
+
+
+def test_screen_capture_fails_clearly_when_the_game_cannot_be_brought_forward(store):
+    w = FakeWindow(["victory"])
+    pts = iter([(0.0, 0.0), (0.25, 0.25)])
+    w.cursor_norm = lambda: next(pts)
+    w.hits = [True, True]
+    calls = {"n": 0}
+
+    def focus():                                           # the first focus (start of calibration) works, the later one does not
+        calls["n"] += 1
+        w.fg = calls["n"] == 1
+        return w.fg
+    w.focus = focus
+    m = make_manager(store, w)
+    m.calibrate("tg", "screen", "victory2")
+    wait_idle(m)
+    last = m.events[-1]
+    assert last["phase"] == "failed" and "bring the game to the front" in last["error"]
+    assert not store.template_path("tg", "victory2").exists()
 
 
 def test_calibration_needs_a_window_title(home):
@@ -487,3 +596,59 @@ def test_vision_retries_without_rejected_parameters_and_reports_errors(monkeypat
     assert "max_completion_tokens" in calls[1]
     with pytest.raises(CloudError, match="401"):
         cloud(monkeypatch, "openai", lambda req: httpx.Response(401, json={"error": {"message": "bad key"}})).vision("s", "t", [])
+
+
+# ------------------------------------------------------------------ the Windows hotkey thread, against a fake user32
+def test_hotkey_thread_registers_receives_and_unregisters():
+    import ctypes
+    from types import SimpleNamespace
+    from reo.gameplay.io import WM_HOTKEY, WM_QUIT, VK_F8, _Hotkey
+
+    calls = []
+    queue = [WM_HOTKEY, WM_QUIT]                         # one F8, then the quit that close() posts
+    quit_posted = threading.Event()
+
+    class User32:
+        def RegisterHotKey(self, hwnd, ident, mods, vk):
+            calls.append(("register", mods, vk))
+            return 1
+
+        def GetMessageW(self, ref, *_):
+            while not queue:
+                return 0
+            m = queue.pop(0)
+            if m == WM_QUIT:
+                quit_posted.wait(2)
+                return 0                                 # GetMessage returns 0 on WM_QUIT
+            ref._obj.message = m
+            return 1
+
+        def PostThreadMessageW(self, tid, msg, *_):
+            calls.append(("quit", msg))
+            quit_posted.set()
+
+        def UnregisterHotKey(self, hwnd, ident):
+            calls.append(("unregister",))
+
+    fake_c = SimpleNamespace(byref=ctypes.byref, windll=SimpleNamespace(kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 4242)))
+    hk = _Hotkey(User32(), fake_c, VK_F8)
+    assert hk.ok and hk.hit.wait(2)                      # the WM_HOTKEY message set the flag
+    hk.close()
+    for _ in range(100):
+        if ("unregister",) in calls:
+            break
+        threading.Event().wait(0.01)
+    assert calls[0] == ("register", 0x4000, VK_F8)       # MOD_NOREPEAT, F8
+    assert ("quit", WM_QUIT) in calls and ("unregister",) in calls
+
+
+def test_hotkey_that_cannot_be_registered_reports_not_ok():
+    import ctypes
+    from types import SimpleNamespace
+    from reo.gameplay.io import VK_F8, _Hotkey
+
+    class User32:
+        def RegisterHotKey(self, *a): return 0           # F8 already owned by another program
+    fake_c = SimpleNamespace(byref=ctypes.byref, windll=SimpleNamespace(kernel32=SimpleNamespace(GetCurrentThreadId=lambda: 1)))
+    hk = _Hotkey(User32(), fake_c, VK_F8)
+    assert hk.ok is False

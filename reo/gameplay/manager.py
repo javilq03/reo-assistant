@@ -31,6 +31,7 @@ class GameplayManager:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last = {"game": "", "boss": ""}
+        self.point_timeout = 90.0            # how long a calibration waits for F8
 
     # ------------------------------------------------------------------ plumbing
     def emit(self, **ev) -> None:
@@ -168,6 +169,9 @@ class GameplayManager:
         result: dict = {}
         try:
             window.begin()
+            warn = getattr(window, "elevation_warning", lambda: "")()
+            if warn:
+                self.emit(kind="log", text=warn)
             result = GameplayRunner(self.store, window, Brain(ask), self.emit, self._stop, sleep=self.sleep).run(cfg)
         except Exception as e:                                  # noqa: BLE001
             log.exception("gameplay run crashed")
@@ -216,27 +220,36 @@ class GameplayManager:
         if notify:
             notify(text)
 
+    def _point(self, window, text: str):
+        """Prompt, then wait for F8 over the game. Raises GameWindowError with the reason when none arrives."""
+        self._prompt(window, text)
+        p = wait_point(window, self._stop, timeout=self.point_timeout, sleep=self.sleep)
+        if p is not None:
+            return p
+        if self._stop.is_set() or window.aborted():
+            raise GameWindowError("Cancelled.")
+        raise GameWindowError("I did not see F8 with the pointer over the game. If the game runs as administrator, run Reo as "
+                              "administrator too (Windows hides key presses and clicks aimed at it). Otherwise click Reo's "
+                              "window first and press F8 while the pointer is over the game.")
+
     def _calibrate(self, window, game: str, kind: str, name: str) -> None:
         ok, err = False, ""
+        arm, disarm = getattr(window, "arm_hotkey", None), getattr(window, "disarm_hotkey", None)
         try:
             window.begin()
+            if arm and not arm():
+                self.emit(kind="log", text="Another program is using F8, so I am watching the key directly. If F8 is not detected, close that program.")
+            warn = getattr(window, "elevation_warning", lambda: "")()
+            if warn:
+                self.emit(kind="log", text=warn)
             window.focus()
             if kind == "target":
-                self._prompt(window, f"Hover over '{name}' in the game and press F8. Esc cancels.")
-                p = wait_point(window, self._stop, sleep=self.sleep)
-                if p is None:
-                    raise GameWindowError("Cancelled.")
+                p = self._point(window, f"Hover over '{name}' in the game and press F8. Esc cancels.")
                 self.store.set_target(game, name, p)
             else:
                 what = "a screen" if kind == "screen" else "a region"
-                self._prompt(window, f"{name}: hover the TOP-LEFT corner of {what} to capture and press F8. Esc cancels.")
-                a = wait_point(window, self._stop, sleep=self.sleep)
-                if a is None:
-                    raise GameWindowError("Cancelled.")
-                self._prompt(window, f"{name}: now the BOTTOM-RIGHT corner and press F8.")
-                b = wait_point(window, self._stop, sleep=self.sleep)
-                if b is None:
-                    raise GameWindowError("Cancelled.")
+                a = self._point(window, f"{name}: hover the TOP-LEFT corner of {what} to capture and press F8. Esc cancels.")
+                b = self._point(window, f"{name}: now the BOTTOM-RIGHT corner and press F8.")
                 x0, y0, x1, y1 = min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])
                 if x1 - x0 < 0.01 or y1 - y0 < 0.01:
                     raise GameWindowError("That area is too small. Try again.")
@@ -244,8 +257,10 @@ class GameplayManager:
                 if kind == "region":
                     self.store.set_region(game, name, region)
                 else:
+                    window.focus()                              # F8 may have been pressed while Reo had focus: bring the game back first
+                    self.sleep(0.4)
                     if not window.is_foreground():
-                        raise GameWindowError("The game was not in front when capturing. Try again.")
+                        raise GameWindowError("I could not bring the game to the front to capture it. Try again.")
                     self.store.save_screen(game, name, crop_norm(window.capture(), region), region)
             ok = True
         except GameWindowError as e:
@@ -255,6 +270,8 @@ class GameplayManager:
             err = f"Calibration failed: {e}"
         finally:
             try:
+                if disarm:
+                    disarm()
                 window.end()
             finally:
                 self._release()
