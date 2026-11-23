@@ -1437,7 +1437,7 @@ async function gpStart() {
 }
 
 function gpRunCard() {
-  const d = gp.data, g = d.game, p = gp.progress || {}, busy = gp.running || gp.calibrating;
+  const d = gp.data, g = d.game, p = gp.progress || {}, busy = gp.running;
   const status = gp.running
     ? `Attempt ${p.attempt || 1}${p.turn ? `, turn ${p.turn}` : ''}${p.hp != null ? `, boss at ${Math.round(p.hp)}%` : ''}${gp.screen ? ` (screen: ${gp.screen})` : ''}`
     : d.problems.length ? `Not ready: ${d.problems.length} thing${d.problems.length === 1 ? '' : 's'} left to set up` : 'Ready to play';
@@ -1447,20 +1447,21 @@ function gpRunCard() {
     gp.running ? h('div', { class: 'progress' }, h('i', { style: `width:${Math.min(100, Math.round(100 * gp.attemptsDone / Math.max(1, g.max_attempts)))}%` })) : null,
     h('div', { class: 'gp-btns' },
       h('button', { class: 'btn primary', id: 'gpStart', type: 'button', text: 'Start', disabled: busy, onclick: gpStart }),
-      h('button', { class: 'btn danger', id: 'gpStop', type: 'button', text: gp.calibrating ? 'Cancel' : 'Stop', disabled: !busy,
-        onclick: () => { if (gp.calibrating) api().gameplay_cancel(); else api().gameplay_stop(); } }),
+      h('button', { class: 'btn danger', id: 'gpStop', type: 'button', text: 'Stop', disabled: !busy,
+        onclick: () => api().gameplay_stop() }),
       h('button', { class: 'btn', type: 'button', text: 'Open game folder', onclick: () => api().gameplay_open_folder(g.id) })),
     !gp.running && d.problems.length ? h('ul', { class: 'gp-list', id: 'gpProblems' }, d.problems.map(t => h('li', { text: t }))) : null,
     gp.log.length ? h('div', { class: 'gp-log', id: 'gpLog' }, gp.log.slice(-8).map(t => h('div', { text: t }))) : null);
 }
 
 function gpSetupCard() {
-  const d = gp.data, g = d.game, targets = g.targets || [], lock = gp.running || gp.calibrating;
+  const d = gp.data, g = d.game, targets = g.targets || [], lock = gp.running;
   const set = (kind, name) => async () => {
     if (lock) return;
-    const r = await api().gameplay_calibrate(g.id, kind, name);
-    if (r.error) return toast(r.error, true);
-    gp.calibrating = true; gp.prompt = 'Switching to the game...'; gpRepaint('run', 'setup');
+    toast('Taking a screenshot of the game...');
+    const r = await api().gameplay_snapshot(g.id);
+    if (r.error) return toast(r.error, true, 6000);
+    gpPicker(g.id, kind, name, r);
   };
   const rm = (kind, name) => async () => { gp.data = await api().gameplay_remove(g.id, kind, name); gpRepaint('setup', 'run', 'boss'); };
   const badge = ok => h('span', { class: 'badge ' + (ok ? 'good' : 'mid'), text: ok ? 'Set' : 'Not set' });
@@ -1492,10 +1493,45 @@ function gpSetupCard() {
   return h('div', { class: 'card', 'data-gp': 'setup' },
     h('details', { class: 'gp-setup', open: gp.setupOpen, ontoggle: e => { gp.setupOpen = e.target.open; } },
       h('summary', { text: 'Teach Reo this game' }),
-      h('div', { class: 'hint2', text: 'Press a button, switch to the game, hover over the spot and press F8. For screens and regions press F8 on the top-left corner, then on the bottom-right corner. A notification shows each prompt, so you can keep the game in front.' }),
+      h('div', { class: 'hint2', text: 'Open the game on the screen you want to teach, then press a button here. Reo takes a screenshot and shows it: click the spot for a target, or drag a rectangle around the part to recognize for a screen or region.' }),
       h('h4', { text: 'Click targets (card slots, ultimate, buttons)' }), ...targetRows, addRow('target', 'New target, e.g. skip', 'Add target'),
       h('h4', { text: 'Screens Reo recognizes (capture each one while the game shows it)' }), ...screenRows, addRow('screen', 'New screen, e.g. stage_select', 'Add screen'),
       h('h4', { text: 'Zoomed regions (optional, sent at higher detail every turn)' }), ...regionRows, addRow('region', 'Region name', 'Add region', regionRows.length ? '' : 'hand')));
+}
+
+function gpPicker(game, kind, name, shot) {
+  const area = kind !== 'target';
+  let pts = null;
+  const img = h('img', { class: 'gp-shot', src: shot.image, alt: 'Game screenshot', draggable: false });
+  const mark = h('div', { class: 'gp-mark', hidden: true });
+  const stage = h('div', { class: 'gp-stage' }, img, mark);
+  const msg = h('div', { class: 'hint2', id: 'gpPickHint', text: area ? `Drag a rectangle around '${name}'.` : `Click where Reo should tap for '${name}'.` });
+  const save = h('button', { class: 'btn', id: 'gpPickSave', type: 'button', text: 'Save', disabled: true });
+  const close = () => ov.remove();
+  const norm = e => { const r = img.getBoundingClientRect(); return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))]; };
+  const draw = () => {
+    if (!pts) { mark.hidden = true; return; }
+    const r = img.getBoundingClientRect(), s0 = stage.getBoundingClientRect();
+    mark.hidden = false; mark.classList.toggle('dot', !area);
+    const [x, y, w, hh] = area ? pts : [pts[0], pts[1], 0, 0];
+    Object.assign(mark.style, { left: (r.left - s0.left + x * r.width) + 'px', top: (r.top - s0.top + y * r.height) + 'px', width: (w * r.width) + 'px', height: (hh * r.height) + 'px' });
+  };
+  let start = null;
+  stage.addEventListener('pointerdown', e => { e.preventDefault(); start = norm(e); pts = area ? [...start, 0, 0] : start; draw(); stage.setPointerCapture(e.pointerId); });
+  stage.addEventListener('pointermove', e => {
+    if (!start || !area) return;
+    const c = norm(e); pts = [Math.min(start[0], c[0]), Math.min(start[1], c[1]), Math.abs(c[0] - start[0]), Math.abs(c[1] - start[1])]; draw();
+  });
+  stage.addEventListener('pointerup', () => { start = null; save.disabled = !pts || (area && (pts[2] < 0.01 || pts[3] < 0.01)); });
+  save.addEventListener('click', async () => {
+    const r = await api().gameplay_save_pick(game, kind, name, pts);
+    if (r.error) return toast(r.error, true);
+    gp.data = r; toast(`Saved '${name}'`); close(); gpRepaint('setup', 'run', 'game');
+  });
+  const ov = h('div', { class: 'gp-picker', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Pick on screenshot' },
+    h('div', { class: 'gp-picker-box' }, h('h3', { text: name }), shot.warning ? h('div', { class: 'gp-prompt', text: shot.warning }) : null,
+      stage, msg, h('div', { class: 'gp-btns' }, save, h('button', { class: 'btn', id: 'gpPickCancel', type: 'button', text: 'Cancel', onclick: close }))));
+  document.body.appendChild(ov);
 }
 
 function gpBossCard() {
@@ -1562,13 +1598,6 @@ function onGameplayEvent(ev) {
       gp.attemptsDone += 1; gpLog(ev.message);
       if (orbMode) showPopup(ev.message);
       gpReload('run', 'boss');
-      break;
-    case 'calibrate':
-      if (ev.phase === 'wait') { gp.calibrating = true; gp.prompt = ev.text; gpRepaint('run', 'setup'); break; }
-      gp.calibrating = false; gp.prompt = '';
-      if (ev.phase === 'done') toast(`Saved '${ev.name}'`);
-      else if (ev.error && ev.error !== 'Cancelled.') toast(ev.error, true, 6000);
-      gpReload();
       break;
     case 'done': {
       gp.running = false; gp.screen = ''; gp.prompt = '';

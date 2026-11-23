@@ -982,7 +982,8 @@ class Bridge:
     def _gp(self):
         if self._gameplay is None:
             from .gameplay import GameplayManager
-            self._gameplay = GameplayManager(lambda **ev: self._emit(e="gameplay", **ev), self._get_computer, self._gameplay_ask)
+            self._gameplay = GameplayManager(lambda **ev: self._emit(e="gameplay", **ev), self._get_computer, self._gameplay_ask,
+                                           focus_reo=self._focus_reo)
         return self._gameplay
 
     def _gameplay_ask(self):
@@ -1019,11 +1020,16 @@ class Bridge:
     def gameplay_remove(self, game: str, kind: str, name: str):
         return self._gp().remove(game, kind, name)
 
-    def gameplay_calibrate(self, game: str, kind: str, name: str):
-        return self._gp().calibrate(game, kind, name)
+    def gameplay_snapshot(self, game: str):
+        return self._gp().snapshot(game)
 
-    def gameplay_cancel(self):
-        return self._gp().cancel()
+    def gameplay_save_pick(self, game: str, kind: str, name: str, pts: list):
+        return self._gp().save_pick(game, kind, name, pts)
+
+    def _focus_reo(self):
+        pc = self._get_computer()
+        if pc is not None:
+            pc.focus("Reo")
 
     def gameplay_start(self, game: str, boss: str, max_attempts: int = 10, stop_on_win: bool = True):
         return self._gp().start(game, boss, max_attempts, stop_on_win)

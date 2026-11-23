@@ -9,8 +9,6 @@ keeps working when the window is moved or resized. A window object offers:
     is_foreground() -> bool
     capture() -> PIL.Image    client area only
     click(nx, ny)             move the pointer there and click
-    cursor_norm() -> (nx, ny) | None   pointer position inside the window, None when outside
-    key_down(vk) -> bool
     aborted() -> bool         the user pressed Esc / Stop
     begin() / end()           Esc watcher + gold cursor for the duration of a run
 
@@ -19,12 +17,8 @@ WinGameWindow is the real Windows implementation; tests use a fake with the same
 from __future__ import annotations
 
 import io
-import threading
 import time
 from typing import Callable
-
-VK_F8 = 0x77
-
 
 class GameWindowError(RuntimeError):
     pass
@@ -49,66 +43,8 @@ def crop_norm(img, region):
     return img.crop((x0, y0, max(x0 + 1, int((x + w) * W)), max(y0 + 1, int((y + h) * H))))
 
 
-def wait_point(window, stop, timeout: float = 90.0, poll: float = 0.03, sleep: Callable[[float], None] = time.sleep,
-               now: Callable[[], float] = time.time, vk: int = VK_F8):
-    """Wait for the user to hover over something in the game and press F8. Returns (nx, ny) or None
-    (timeout, Esc or stop). A press counts when the window reports a registered hotkey hit (delivered by Windows
-    whichever program is in front) or when polling sees the key go down; presses with the pointer outside the
-    game window are ignored."""
-    hit = getattr(window, "hotkey_hit", None)
-    end = now() + timeout
-    prev = window.key_down(vk)
-    while now() < end:
-        if stop.is_set() or window.aborted():
-            return None
-        down = window.key_down(vk)
-        if (down and not prev) or bool(hit and hit()):
-            p = window.cursor_norm()
-            if p is not None:
-                return p
-        prev = down
-        sleep(poll)
-    return None
-
-
-WM_HOTKEY, WM_QUIT, MOD_NOREPEAT = 0x0312, 0x0012, 0x4000
-ELEVATION_WARNING = ("The game is running as administrator and Reo is not. Windows then blocks Reo's clicks and hides key "
-                     "presses aimed at the game. Close Reo and start it again with right-click > Run as administrator.")
-
-
-class _Hotkey:
-    """RegisterHotKey on its own thread with its own message loop. Windows delivers a registered hotkey even while another
-    program is in front, which polling the key state cannot promise (it sees nothing when the game has the input)."""
-
-    def __init__(self, user32, ctypes_mod, vk: int, ident: int = 0x7E08):
-        self.u, self.c, self.vk, self.ident = user32, ctypes_mod, vk, ident
-        self.hit = threading.Event()
-        self.ok = False
-        self._tid = 0
-        self._ready = threading.Event()
-        threading.Thread(target=self._loop, daemon=True, name="reo-hotkey").start()
-        self._ready.wait(2.0)
-
-    def _loop(self) -> None:
-        from ctypes import wintypes
-        c, u = self.c, self.u
-        try:
-            self._tid = c.windll.kernel32.GetCurrentThreadId()
-            self.ok = bool(u.RegisterHotKey(None, self.ident, MOD_NOREPEAT, self.vk))
-        finally:
-            self._ready.set()
-        if not self.ok:
-            return
-        msg = wintypes.MSG()
-        while u.GetMessageW(c.byref(msg), None, 0, 0) > 0:
-            if msg.message == WM_HOTKEY:
-                self.hit.set()
-        u.UnregisterHotKey(None, self.ident)
-
-    def close(self) -> None:
-        if self._tid:
-            self.u.PostThreadMessageW(self._tid, WM_QUIT, 0, 0)
-            self._tid = 0
+ELEVATION_WARNING = ("The game is running as administrator and Reo is not. Windows then blocks Reo's clicks into it. "
+                     "Close Reo and start it again with right-click > Run as administrator.")
 
 
 class WinGameWindow:
@@ -118,29 +54,6 @@ class WinGameWindow:
         self.pc = computer
         self.title = (title or "").strip()
         self._h = 0
-        self._hk: _Hotkey | None = None
-
-    # ---- F8 (calibration)
-    def arm_hotkey(self) -> bool:
-        """Start listening for F8 through RegisterHotKey. False when another program already owns F8."""
-        self.disarm_hotkey()
-        self._hk = _Hotkey(self.pc.u, self.pc.c, VK_F8)
-        ok = self._hk.ok
-        if not ok:
-            self._hk = None
-        return ok
-
-    def disarm_hotkey(self) -> None:
-        if self._hk:
-            self._hk.close()
-            self._hk = None
-
-    def hotkey_hit(self) -> bool:
-        hk = self._hk
-        if hk and hk.hit.is_set():
-            hk.hit.clear()
-            return True
-        return False
 
     def elevation_warning(self) -> str:
         """ELEVATION_WARNING when the game is confirmed to run as administrator while Reo does not, else ''.
@@ -222,13 +135,6 @@ class WinGameWindow:
     def aborted(self) -> bool:
         return self.pc.aborted.is_set()
 
-    def notify(self, text: str) -> None:
-        """A Windows toast, so the prompt is visible even when the game covers Reo's window."""
-        try:
-            self.pc.notify("Reo Gameplay", text)
-        except Exception:                                      # noqa: BLE001
-            pass
-
     def begin(self):
         self.pc.begin()
 
@@ -251,15 +157,3 @@ class WinGameWindow:
         y = t + max(0.0, min(1.0, ny)) * (b - t)
         self.pc.move(x, y)
         self.pc.click()
-
-    def cursor_norm(self):
-        if not self.valid():
-            return None
-        l, t, r, b = self.rect()
-        x, y = self.pc.cursor_pos()
-        if not (l <= x < r and t <= y < b):
-            return None
-        return (x - l) / (r - l), (y - t) / (b - t)
-
-    def key_down(self, vk: int) -> bool:
-        return bool(self.pc.u.GetAsyncKeyState(vk) & 0x8000)

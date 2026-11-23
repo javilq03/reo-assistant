@@ -330,15 +330,59 @@ def test_gameplay_events_drive_the_button_status_and_panel(page):
     expect(page.locator("#gpStart")).to_be_enabled()
 
 
-def test_gameplay_calibration_prompt_is_shown_and_cancellable(page):
+def test_gameplay_picker_saves_a_target_by_clicking_the_screenshot(page):
+    import base64, io
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (400, 200), (30, 60, 90)).save(buf, "JPEG")
+    shot = {"ok": True, "image": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode(), "width": 400, "height": 200}
+    gp = page.bridge._gp()
+    gp.snapshot = lambda game: shot
+    saved = {}
+    orig = gp.save_pick
+    gp.save_pick = lambda game, kind, name, pts: (saved.update(kind=kind, name=name, pts=pts), orig(game, kind, name, pts))[1]
     page.click("#gameBtn")
-    emit = lambda **ev: page.bridge._emit(e="gameplay", **ev)
-    emit(kind="calibrate", phase="wait", text="Hover over 'ultimate' in the game and press F8. Esc cancels.")
-    expect(page.locator("#gpPrompt")).to_contain_text("press F8")
-    expect(page.locator("#gpStop")).to_have_text("Cancel")
-    emit(kind="calibrate", phase="done", name="ultimate", what="target", error="")
-    expect(page.locator("#gpPrompt")).to_have_count(0)
-    expect(page.locator(".toast").last).to_contain_text("Saved 'ultimate'")
+    page.click("summary:has-text('Teach Reo this game')")
+    page.locator("[data-gp=setup] .gp-row", has_text="ultimate").get_by_role("button").first.click()
+    expect(page.locator(".gp-picker")).to_be_visible()
+    expect(page.locator("#gpPickSave")).to_be_disabled()
+    box = page.locator(".gp-shot").bounding_box()
+    page.mouse.click(box["x"] + box["width"] * 0.25, box["y"] + box["height"] * 0.5)
+    expect(page.locator("#gpPickSave")).to_be_enabled()
+    page.click("#gpPickSave")
+    expect(page.locator(".gp-picker")).to_have_count(0)
+    assert saved["kind"] == "target" and saved["name"] == "ultimate"
+    assert abs(saved["pts"][0] - 0.25) < 0.03 and abs(saved["pts"][1] - 0.5) < 0.03
+
+
+def test_gameplay_picker_drags_a_rectangle_for_a_screen_and_can_cancel(page):
+    import base64, io
+    from PIL import Image
+    buf = io.BytesIO(); Image.new("RGB", (400, 200), (30, 60, 90)).save(buf, "JPEG")
+    gp = page.bridge._gp()
+    gp.snapshot = lambda game: {"ok": True, "image": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode(), "width": 400, "height": 200}
+    saved = {}
+    gp.save_pick = lambda game, kind, name, pts: (saved.update(kind=kind, pts=pts), gp.state(game))[1]
+    page.click("#gameBtn")
+    page.click("summary:has-text('Teach Reo this game')")
+    page.locator("[data-gp=setup] .gp-row", has_text="victory").get_by_role("button").first.click()
+    box = page.locator(".gp-shot").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.2, box["y"] + box["height"] * 0.2)
+    page.mouse.down(); page.mouse.move(box["x"] + box["width"] * 0.6, box["y"] + box["height"] * 0.7); page.mouse.up()
+    page.click("#gpPickSave")
+    expect(page.locator(".gp-picker")).to_have_count(0)
+    assert saved["kind"] == "screen" and 0.35 < saved["pts"][2] < 0.45 and 0.45 < saved["pts"][3] < 0.55
+    page.locator("[data-gp=setup] .gp-row", has_text="victory").get_by_role("button").first.click()
+    page.click("#gpPickCancel")
+    expect(page.locator(".gp-picker")).to_have_count(0)
+
+
+def test_gameplay_picker_shows_snapshot_errors(page):
+    page.bridge._gp().snapshot = lambda game: {"error": "I cannot find a window titled 'x'. Is the game open?"}
+    page.click("#gameBtn")
+    page.click("summary:has-text('Teach Reo this game')")
+    page.locator("[data-gp=setup] .gp-row", has_text="ultimate").get_by_role("button").first.click()
+    expect(page.locator(".toast.bad").last).to_contain_text("cannot find a window")
+    expect(page.locator(".gp-picker")).to_have_count(0)
 
 
 def test_gameplay_setup_lists_targets_and_screens(page):

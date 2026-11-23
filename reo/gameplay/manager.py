@@ -1,6 +1,6 @@
 """What the Bridge talks to: one place that owns the Gameplay thread, the kill switch and calibration.
 
-Only one job (a run or a calibration) exists at a time. Every method returns JSON-friendly data; progress
+Only one job (a run) exists at a time. Every method returns JSON-friendly data; progress
 goes out through emit(kind=..., ...) which the Bridge forwards to the page as {"e": "gameplay", ...}.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Callable
 
 from . import learning
 from .brain import Brain, BrainError
-from .io import GameWindowError, crop_norm, wait_point
+from .io import GameWindowError, crop_norm
 from .runner import GameplayRunner, RunConfig
 from .store import GameStore, slug
 
@@ -21,17 +21,19 @@ log = logging.getLogger("reo.gameplay")
 
 class GameplayManager:
     def __init__(self, emit: Callable[..., None], get_computer: Callable, get_ask: Callable, store: GameStore | None = None,
-                 window_factory: Callable | None = None, sleep: Callable[[float], None] = time.sleep):
+                 window_factory: Callable | None = None, sleep: Callable[[float], None] = time.sleep,
+                 focus_reo: Callable | None = None):
         self._emit_cb, self._get_computer, self._get_ask = emit, get_computer, get_ask
         self.store = store or GameStore()
         self._window_factory = window_factory
         self.sleep = sleep
+        self._focus_reo = focus_reo
+        self._snap = None
         self._lock = threading.Lock()
-        self._busy = ""                     # "run" | "calibrate" | ""
+        self._busy = ""                     # "run" | ""
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._last = {"game": "", "boss": ""}
-        self.point_timeout = 90.0            # how long a calibration waits for F8
 
     # ------------------------------------------------------------------ plumbing
     def emit(self, **ev) -> None:
@@ -55,7 +57,7 @@ class GameplayManager:
     def _claim(self, what: str) -> str:
         with self._lock:
             if self._busy:
-                return "Gameplay is already " + ("running" if self._busy == "run" else "waiting for a calibration click") + "."
+                return "Gameplay is already " + ("running") + "."
             self._busy = what
         return ""
 
@@ -187,92 +189,71 @@ class GameplayManager:
         self._stop.set()
         return True
 
-    # ------------------------------------------------------------------ calibration (point at it in the game, press F8)
-    def calibrate(self, game: str, kind: str, name: str) -> dict:
-        if kind not in ("target", "screen", "region"):
-            return {"error": "Unknown calibration."}
-        name = slug(name).replace("-", "_")
-        if not self.store.exists(game) or not name:
-            return {"error": "Give it a name first."}
+    # ------------------------------------------------------------------ calibration (click on a screenshot of the game)
+    def snapshot(self, game: str) -> dict:
+        """Photograph the game window and hand the picture to the panel, where the user clicks on it.
+        No key press is involved, so nothing here depends on who owns the keyboard."""
+        if not self.store.exists(game):
+            return {"error": "Unknown game."}
         g = self.store.game(game)
         if not g["window_title"]:
             return {"error": "Set the game window title first."}
+        if self._busy:
+            return {"error": "Gameplay is already running."}
         try:
             window = self._window(g["window_title"])
+            if not window.find():
+                return {"error": f"I cannot find a window titled '{g['window_title']}'. Is the game open?"}
+            window.focus()
+            self.sleep(0.6)
+            if not window.is_foreground():
+                return {"error": "I could not bring the game to the front. Click on the game once, then try again."}
+            img = window.capture()
         except GameWindowError as e:
             return {"error": str(e)}
-        if not window.find():
-            return {"error": f"I cannot find a window titled '{g['window_title']}'. Is the game open?"}
-        busy = self._claim("calibrate")
-        if busy:
-            return {"error": busy}
-        self._stop.clear()
-        threading.Thread(target=self._calibrate, args=(window, slug(game), kind, name), daemon=True, name="reo-calibrate").start()
-        return {"ok": True}
-
-    def cancel(self) -> bool:
-        self._stop.set()
-        return True
-
-    def _prompt(self, window, text: str) -> None:
-        self.emit(kind="calibrate", phase="wait", text=text)
-        notify = getattr(window, "notify", None)
-        if notify:
-            notify(text)
-
-    def _point(self, window, text: str):
-        """Prompt, then wait for F8 over the game. Raises GameWindowError with the reason when none arrives."""
-        self._prompt(window, text)
-        p = wait_point(window, self._stop, timeout=self.point_timeout, sleep=self.sleep)
-        if p is not None:
-            return p
-        if self._stop.is_set() or window.aborted():
-            raise GameWindowError("Cancelled.")
-        raise GameWindowError("I did not see F8 with the pointer over the game. If the game runs as administrator, run Reo as "
-                              "administrator too (Windows hides key presses and clicks aimed at it). Otherwise click Reo's "
-                              "window first and press F8 while the pointer is over the game.")
-
-    def _calibrate(self, window, game: str, kind: str, name: str) -> None:
-        ok, err = False, ""
-        arm, disarm = getattr(window, "arm_hotkey", None), getattr(window, "disarm_hotkey", None)
-        try:
-            window.begin()
-            if arm and not arm():
-                self.emit(kind="log", text="Another program is using F8, so I am watching the key directly. If F8 is not detected, close that program.")
-            warn = getattr(window, "elevation_warning", lambda: "")()
-            if warn:
-                self.emit(kind="log", text=warn)
-            window.focus()
-            if kind == "target":
-                p = self._point(window, f"Hover over '{name}' in the game and press F8. Esc cancels.")
-                self.store.set_target(game, name, p)
-            else:
-                what = "a screen" if kind == "screen" else "a region"
-                a = self._point(window, f"{name}: hover the TOP-LEFT corner of {what} to capture and press F8. Esc cancels.")
-                b = self._point(window, f"{name}: now the BOTTOM-RIGHT corner and press F8.")
-                x0, y0, x1, y1 = min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])
-                if x1 - x0 < 0.01 or y1 - y0 < 0.01:
-                    raise GameWindowError("That area is too small. Try again.")
-                region = [x0, y0, x1 - x0, y1 - y0]
-                if kind == "region":
-                    self.store.set_region(game, name, region)
-                else:
-                    window.focus()                              # F8 may have been pressed while Reo had focus: bring the game back first
-                    self.sleep(0.4)
-                    if not window.is_foreground():
-                        raise GameWindowError("I could not bring the game to the front to capture it. Try again.")
-                    self.store.save_screen(game, name, crop_norm(window.capture(), region), region)
-            ok = True
-        except GameWindowError as e:
-            err = str(e)
         except Exception as e:                                  # noqa: BLE001
-            log.exception("calibration failed")
-            err = f"Calibration failed: {e}"
+            log.exception("snapshot failed")
+            return {"error": f"Could not take the screenshot: {e}"}
         finally:
-            try:
-                if disarm:
-                    disarm()
-                window.end()
-            finally:
-                self._release()
-        self.emit(kind="calibrate", phase="done" if ok else "failed", name=name, what=kind, error=err)
+            back = self._focus_reo
+            if back:
+                try:
+                    back()
+                except Exception:                               # noqa: BLE001
+                    log.exception("could not bring Reo back")
+        import base64
+        from .io import encode
+        self._snap = {"game": slug(game), "img": img}
+        data = base64.b64encode(encode(img)).decode("ascii")
+        out = {"ok": True, "image": "data:image/jpeg;base64," + data, "width": img.width, "height": img.height}
+        warn = getattr(window, "elevation_warning", lambda: "")()
+        if warn:
+            out["warning"] = warn
+        return out
+
+    def save_pick(self, game: str, kind: str, name: str, pts: list) -> dict:
+        """pts are normalized: one [x, y] for a target, [x, y, w, h] for a screen or region."""
+        name = slug(name).replace("-", "_")
+        if kind not in ("target", "screen", "region") or not name:
+            return {"error": "Give it a name first."}
+        if not self.store.exists(game):
+            return {"error": "Unknown game."}
+        try:
+            v = [min(1.0, max(0.0, float(x))) for x in pts]
+        except (TypeError, ValueError):
+            return {"error": "That selection is not valid."}
+        if kind == "target":
+            if len(v) < 2:
+                return {"error": "Click a spot on the picture."}
+            self.store.set_target(game, name, (v[0], v[1]))
+            return self.state(game)
+        if len(v) != 4 or v[2] < 0.01 or v[3] < 0.01:
+            return {"error": "Drag a rectangle that is a bit larger."}
+        if kind == "region":
+            self.store.set_region(game, name, v)
+            return self.state(game)
+        snap = self._snap
+        if not snap or snap["game"] != slug(game):
+            return {"error": "Take a new screenshot first."}
+        self.store.save_screen(game, name, crop_norm(snap["img"], v), v)
+        return self.state(game)
