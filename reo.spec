@@ -10,7 +10,11 @@ for pkg in ("faster_whisper", "ctranslate2", "onnxruntime", "av", "sounddevice",
         print(f"WARNING: {pkg} could not be bundled ({e}). Reo can still download the speech engine at run time, but bundle it if you can.")
 
 a = Analysis(["run.py"], datas=datas, binaries=binaries,
-             hiddenimports=["keyring.backends.Windows", "pynvml", "pypdf"], excludes=["tkinter"])
+             hiddenimports=["keyring.backends.Windows", "pynvml", "pypdf",
+                            # Gameplay is imported lazily, so name it explicitly rather than rely on bytecode scanning
+                            "reo.gameplay", "reo.gameplay.manager", "reo.gameplay.runner", "reo.gameplay.brain", "reo.gameplay.io",
+                            "reo.gameplay.learning", "reo.gameplay.screens", "reo.gameplay.store", "PIL.ImageGrab"],
+             excludes=["tkinter"])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Reo", console=False, icon="reo/ui/assets/reo.ico")
 coll = COLLECT(exe, a.binaries, a.datas, name="Reo")

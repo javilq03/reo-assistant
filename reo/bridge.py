@@ -50,6 +50,7 @@ class Bridge:
         self._maxed = False
         self._drag = None
         self._computer = None
+        self._gameplay = None         # built on first use (reo.gameplay)
         self._awake_until = 0.0
         self._engine_busy = False
         self._engine_healed = False
@@ -255,6 +256,8 @@ class Bridge:
         self._stop.set()
         if self._computer is not None:
             self._computer.aborted.set()          # the stop button also halts Computer Control
+        if self._gameplay is not None:
+            self._gameplay.stop()                 # ...and Gameplay
         return True
 
     def _start(self, cid: str, opts: dict | None):
@@ -299,7 +302,8 @@ class Bridge:
                 if m.get("role") == "bot":
                     prev_bot = m.get("text", "") or " "
                     break
-            cc = cc_on and computer.wants_control(last_user, computer.used_computer(prev_bot))
+            gp_busy = bool(self._gameplay and self._gameplay.busy())          # Gameplay owns the mouse while it runs
+            cc = cc_on and not gp_busy and computer.wants_control(last_user, computer.used_computer(prev_bot))
             # The host's own "Computer:/Result:" lines are not part of what Reo said: showing them to him makes him imitate them as text.
             if cc:
                 history = history[-7:]                      # long runs of earlier replies teach him to just chat; keep the recent context only
@@ -308,6 +312,9 @@ class Bridge:
             comp = self._get_computer() if cc else None
             if cc and comp is not None:
                 sys_prompt = (sys_prompt or "") + computer.prompt(*comp.screen_size())
+            elif gp_busy and cc_on:
+                sys_prompt = (sys_prompt or "") + ("\n\nGameplay is running and is using the mouse right now, so you cannot operate the "
+                                                   "computer until it stops. If asked to, say so and suggest pressing Stop.")
             elif cc_on:
                 sys_prompt = (sys_prompt or "") + computer.IDLE_NOTE
             # Hineloim currency: the app does the maths, Reo relays it.
@@ -970,6 +977,77 @@ class Bridge:
             webbrowser.open(url)
             return True
         return False
+
+    # ------------------------------------------------------------------ gameplay (Reo plays a game and learns a boss)
+    def _gp(self):
+        if self._gameplay is None:
+            from .gameplay import GameplayManager
+            self._gameplay = GameplayManager(lambda **ev: self._emit(e="gameplay", **ev), self._get_computer, self._gameplay_ask)
+        return self._gameplay
+
+    def _gameplay_ask(self):
+        """The model that reads the screen. The cloud API for now; a local vision model can replace this one function."""
+        from .gameplay.brain import BrainError
+        if os.environ.get("REO_MOCK_ENGINE") == "1":
+            return lambda system, text, images: '{"actions": [{"type": "wait", "seconds": 0}], "reason": "mock"}'
+        if not self._cloud.ready():
+            raise BrainError("Gameplay reads the screen with a vision model. Set up an API provider first (Menu > API provider). "
+                             "A local vision model is not supported yet.")
+
+        def ask(system, text, images):
+            try:
+                return self._cloud.vision(system, text, images)
+            except CloudError as e:
+                raise BrainError(str(e)) from e
+        return ask
+
+    def gameplay_state(self, game: str = ""):
+        return self._gp().state(game)
+
+    def gameplay_new_game(self, name: str):
+        return self._gp().new_game(name)
+
+    def gameplay_save_game(self, game: str, patch: dict):
+        return self._gp().save_game(game, patch)
+
+    def gameplay_delete_game(self, game: str):
+        return self._gp().delete_game(game)
+
+    def gameplay_screen_cfg(self, game: str, state: str, patch: dict):
+        return self._gp().set_screen_cfg(game, state, patch)
+
+    def gameplay_remove(self, game: str, kind: str, name: str):
+        return self._gp().remove(game, kind, name)
+
+    def gameplay_calibrate(self, game: str, kind: str, name: str):
+        return self._gp().calibrate(game, kind, name)
+
+    def gameplay_cancel(self):
+        return self._gp().cancel()
+
+    def gameplay_start(self, game: str, boss: str, max_attempts: int = 10, stop_on_win: bool = True):
+        return self._gp().start(game, boss, max_attempts, stop_on_win)
+
+    def gameplay_stop(self):
+        return self._gp().stop()
+
+    def gameplay_teach(self, game: str, boss: str, text: str):
+        return self._gp().teach(game, boss, text)
+
+    def gameplay_rules(self, game: str, boss: str, text: str):
+        return self._gp().set_rules(game, boss, text)
+
+    def gameplay_boss(self, game: str, boss: str):
+        return self._gp().boss_info(game, boss)
+
+    def gameplay_open_folder(self, game: str = ""):
+        gp = self._gp()
+        target = gp.store.dir(game) if game and gp.store.exists(game) else gp.store.root
+        try:
+            os.startfile(str(target))      # type: ignore[attr-defined]  (Windows)
+        except AttributeError:
+            pass
+        return {"path": str(target)}
 
     def open_folder(self, which: str = "models"):
         target = {"models": self._models.dir, "voicebanks": voicebanks_dir(), "data": app_dir()}.get(which, app_dir())

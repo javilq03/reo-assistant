@@ -73,6 +73,13 @@ def models_dir() -> Path:
     return d
 
 
+def games_dir() -> Path:
+    """Gameplay knowledge: <app dir>/games/<game>/ (coords, screen templates, one folder per boss)."""
+    d = app_dir() / "games"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def voicebanks_dir() -> Path:
     d = app_dir() / "voicebanks"
     d.mkdir(exist_ok=True)
@@ -397,7 +404,6 @@ DEFAULTS: dict = {
     "deepThinking": False,
     "cloudModel": False,         # the cloud button next to Reo's name
     "computerControl": False,    # tray switch: allows Computer Control; Reo still acts only when a message asks for it
-    "gameplay": False,           # header Gameplay button: Reo is in gameplay mode (plays a game when asked to)
     "orb_size": 150,             # diameter of the floating orb in px at 100% scale
     # --- cloud / API fallback
     "auto_fallback": True,       # use the cloud provider if the local model is missing or fails

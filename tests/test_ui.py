@@ -242,18 +242,117 @@ def test_cloud_button_and_computer_control_switch(page):
     assert page.bridge._settings.get("computerControl") is True
 
 
-def test_gameplay_button_replaces_the_header_mic(page):
+def test_gameplay_button_replaces_the_header_mic_and_opens_the_panel(page):
     expect(page.locator("#mic")).to_have_count(0)                    # the voice-mode button is gone
     expect(page.locator("#orbBtn")).to_be_visible()
-    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "false")
     page.click("#gameBtn")
-    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#panelOverlay")).to_be_visible()
+    expect(page.locator("#panelTitle")).to_have_text("Gameplay")
+    expect(page.locator("#gpGameSel option")).to_have_text(["The Seven Deadly Sins: Grand Cross"])
+    expect(page.locator("#gpProblems li").first).to_contain_text("window title")        # the first run is not ready yet
+    expect(page.locator("#gpStatus")).to_contain_text("Not ready")
+    shot(page, "gameplay_panel")
+
+
+def test_gameplay_setup_fields_are_saved_and_shrink_the_to_do_list(page):
+    page.click("#gameBtn")
+    page.fill("#gpTitle", "Grand Cross")
+    page.press("#gpTitle", "Tab")
+    page.fill("#gpBoss", "Demon King")
+    page.press("#gpBoss", "Tab")
+    page.fill("#gpAttempts", "7")
+    page.press("#gpAttempts", "Tab")
+    expect(page.locator("#gpProblems")).not_to_contain_text("window title")
+    expect(page.locator("#gpProblems")).not_to_contain_text("boss name")
+    g = page.bridge._gp().store.game("sdsgc")
+    assert g["window_title"] == "Grand Cross" and g["boss"] == "demon-king" and g["max_attempts"] == 7
+    expect(page.locator("[data-gp=boss] h3")).to_have_text("Boss: demon-king")
+    page.click("#gpStopWin")
+    expect(page.locator("#gpStopWin")).to_have_attribute("aria-checked", "false")
+    assert page.bridge._gp().store.game("sdsgc")["stop_on_win"] is False
+
+
+def test_gameplay_start_explains_what_is_missing(page):
+    page.click("#gameBtn")
+    page.click("#gpStart")
+    expect(page.locator(".toast.bad")).to_contain_text("Not ready")
+    expect(page.locator("#gpStatus")).not_to_contain_text("Attempt")
+
+
+def test_gameplay_panel_still_sends_messages_and_shows_the_answer(page):
+    page.click("#gameBtn")
+    page.fill("#gpMsg", "how is it going")
+    page.click("#gpSend")
+    expect(page.locator("#gpReply")).to_contain_text("You said: how is it going", timeout=8000)
+    page.click("#panelClose")
+    expect(page.locator(".msg.user").last).to_have_text("how is it going")          # it is in the normal conversation too
+
+
+def test_gameplay_note_is_saved_to_the_boss_profile(page):
+    page.click("#gameBtn")
+    expect(page.locator("#gpTeach")).to_be_disabled()                                # needs a boss first
+    page.fill("#gpBoss", "demon-king")
+    page.press("#gpBoss", "Tab")
+    page.fill("#gpMsg", "the boss reflects damage when it glows red")
+    page.click("#gpTeach")
+    expect(page.locator("[data-gp=boss]")).to_contain_text("reflects damage when it glows red")
+    assert page.bridge._gp().store.boss("sdsgc", "demon-king").profile() == ["the boss reflects damage when it glows red"]
+
+
+def test_gameplay_rules_can_be_written_by_hand(page):
+    page.click("#gameBtn")
+    page.fill("#gpBoss", "demon-king")
+    page.press("#gpBoss", "Tab")
+    page.fill("#gpRules", "Save the ultimate for phase 2\nKeep two red cards")
+    page.click("#gpSaveRules")
+    expect(page.locator(".badge.gold")).to_have_text("Playbook v2")
+    assert page.bridge._gp().store.boss("sdsgc", "demon-king").playbook()["rules"][1]["text"] == "Keep two red cards"
+
+
+def test_gameplay_events_drive_the_button_status_and_panel(page):
+    page.click("#gameBtn")
+    expect(page.locator("#gameBtn")).not_to_have_class(re.compile("active"))
+    emit = lambda **ev: page.bridge._emit(e="gameplay", **ev)
+    emit(kind="status", running=True, game="sdsgc", boss="demon-king")
     expect(page.locator("#gameBtn")).to_have_class(re.compile("active"))
-    assert page.bridge._settings.get("gameplay") is True
-    expect(page.locator("#status")).to_contain_text("Gameplay")
+    emit(kind="attempt_start", attempt=3, version=2)
+    emit(kind="turn", attempt=3, turn=4, hp=62.0, reason="merge 2 and 3")
+    expect(page.locator("#gpStatus")).to_have_text("Attempt 3, turn 4, boss at 62%")
+    expect(page.locator("#gpLog")).to_contain_text("Turn 4: merge 2 and 3")
+    expect(page.locator("#status")).to_have_text("Playing: attempt 3")
+    expect(page.locator("#gpStart")).to_be_disabled()
+    expect(page.locator("#gpStop")).to_be_enabled()
+    emit(kind="attempt", attempt=3, outcome="loss", turns=4, boss_hp_left=62.0, playbook_version=2, message="Attempt 3 lost on turn 4, boss at 62%.")
+    expect(page.locator("#gpLog")).to_contain_text("Attempt 3 lost on turn 4")
+    emit(kind="done", running=False, finished=False, stopped="The game window is not in front, so I stopped before clicking something else.")
+    expect(page.locator("#gameBtn")).not_to_have_class(re.compile("active"))
+    expect(page.locator(".toast.bad").last).to_contain_text("not in front")
+    expect(page.locator("#gpStart")).to_be_enabled()
+
+
+def test_gameplay_calibration_prompt_is_shown_and_cancellable(page):
     page.click("#gameBtn")
-    expect(page.locator("#gameBtn")).to_have_attribute("aria-pressed", "false")
-    assert page.bridge._settings.get("gameplay") is False
+    emit = lambda **ev: page.bridge._emit(e="gameplay", **ev)
+    emit(kind="calibrate", phase="wait", text="Hover over 'ultimate' in the game and press F8. Esc cancels.")
+    expect(page.locator("#gpPrompt")).to_contain_text("press F8")
+    expect(page.locator("#gpStop")).to_have_text("Cancel")
+    emit(kind="calibrate", phase="done", name="ultimate", what="target", error="")
+    expect(page.locator("#gpPrompt")).to_have_count(0)
+    expect(page.locator(".toast").last).to_contain_text("Saved 'ultimate'")
+
+
+def test_gameplay_setup_lists_targets_and_screens(page):
+    page.click("#gameBtn")
+    page.click("summary:has-text('Teach Reo this game')")
+    expect(page.locator("[data-gp=setup] .gp-row .nm", has_text="card_slot_1")).to_be_visible()
+    expect(page.locator("[data-gp=setup] .gp-row .nm", has_text="battle_ready")).to_be_visible()
+    expect(page.locator("[data-gp=setup] .gp-row", has_text="victory").locator("select").nth(1)).to_have_value("win")
+    page.select_option("[data-gp=setup] .gp-row:has-text('retry_prompt') select >> nth=0", "retry")
+    assert page.bridge._gp().store.screens("sdsgc")["retry_prompt"]["tap"] == "retry"
+    page.fill("#gpNewGame", "Another Game")
+    page.click("#gpAddGame")
+    expect(page.locator("#gpGameSel option")).to_have_count(2)
+    expect(page.locator("#gpGameSel")).to_have_value("another-game")
 
 
 def test_orb_size_in_settings(page):

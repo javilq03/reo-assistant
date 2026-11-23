@@ -132,7 +132,7 @@ function splitAttachments(text) {
 
 // ------------------------------------------------------------------ state
 const state = {
-  settings: { deepThinking: false, cloudModel: false, computerControl: false, gameplay: false, orb_size: 150 }, presets: {}, installed: [], model: {}, cloudReady: false,
+  settings: { deepThinking: false, cloudModel: false, computerControl: false, orb_size: 150 }, presets: {}, installed: [], model: {}, cloudReady: false,
   convs: [], cur: null, stt: { ok: false, reason: '' }, files: [], scan: null, downloads: {}, panel: null, welcome: false, stream: null,
 };
 window.reoSettings = state.settings;
@@ -142,6 +142,9 @@ let notice = '', noticeTimer = null, orbMode = false, orbPrevHF = false, popupTi
 let ttsBusy = false, micDeviceId = '', voiceId = '', nativeOrb = false, sttHandler = null, lastOrbState = '';
 
 const $messages = $('messages'), $input = $('input'), $send = $('send'), $game = $('gameBtn');
+// Gameplay panel state (the panel itself is further down, with the other panels).
+const gp = { data: null, game: '', running: false, calibrating: false, prompt: '', screen: '', progress: null, attemptsDone: 0,
+             log: [], reply: '', awaitReply: false, setupOpen: false };
 
 function flash(msg) {
   notice = msg; updateUI();
@@ -172,10 +175,9 @@ function updateUI() {
   const label = { stop: 'Stop', rec: 'Stop and send', send: 'Send', mic: 'Dictate a message' }[mode];
   $send.title = label; $send.setAttribute('aria-label', label);
 
-  const gameOn = !!state.settings.gameplay;
-  $game.classList.toggle('active', gameOn);
-  $game.setAttribute('aria-pressed', gameOn);
-  $game.title = gameOn ? 'Gameplay is on: click to turn it off' : 'Gameplay: let Reo play a game for you';
+  $game.classList.toggle('active', gp.running);
+  $game.title = gp.running ? 'Gameplay: Reo is playing (click to open)' : 'Gameplay: let Reo play a game for you';
+  $game.setAttribute('aria-label', gp.running ? 'Gameplay (running)' : 'Gameplay');
 
   $('cloudBtn').setAttribute('aria-pressed', !!state.settings.cloudModel);
   const orbState = pending ? 'thinking' : handsFree ? 'listening' : 'idle';
@@ -188,8 +190,9 @@ function updateUI() {
     || (dictating ? 'Listening...'
     : pending ? (state.stream && state.stream.text ? 'Writing...' : state.stream && state.stream.thought ? 'Thinking...' : 'Thinking...')
     : handsFree ? 'Hands-free: listening'
+    : gp.running ? `Playing: attempt ${(gp.progress && gp.progress.attempt) || 1}`
     : state.model.loading ? 'Loading model...'
-    : ready ? (gameOn ? 'Ready - gameplay on' : 'Ready') : 'No model loaded');
+    : ready ? 'Ready' : 'No model loaded');
   const dot = $('dot');
   dot.className = 'dot' + (pending || state.model.loading ? ' busy' : !ready ? ' off' : '');
 
@@ -365,6 +368,7 @@ window.reoEvent = ev => {
     case 'voicedl': onVoiceDl(ev); break;
     case 'toast': toast(ev.text, !!ev.bad, 6000); break;
     case 'stt': onSttEvent(ev); break;
+    case 'gameplay': onGameplayEvent(ev); break;
     case 'tts':
       if (ev.kind === 'start') ttsBusy = true;
       else if (ev.kind === 'done') {
@@ -423,6 +427,7 @@ async function finishStream(ev, errorText) {
   if (ev.conversations) { state.convs = ev.conversations; renderList(); }
   const here = state.cur && ev.conv === state.cur.id;
   let reply = st ? st.text : '';
+  if (gp.awaitReply) { gp.awaitReply = false; gp.reply = errorText || reply.trim(); gpShowReply(); }   // answer to a message typed in the Gameplay panel
   if (here && st) {
     const secs = st.thoughtEnd ? Math.max(1, Math.round((st.thoughtEnd - st.thoughtStart) / 1000)) : 0;
     if (ev.mid) {
@@ -448,7 +453,7 @@ async function finishStream(ev, errorText) {
 }
 
 // ------------------------------------------------------------------ sending
-const chatOpts = () => ({ deepThinking: !!state.settings.deepThinking, cloudModel: !!state.settings.cloudModel, computerControl: !!state.settings.computerControl, gameplay: !!state.settings.gameplay });
+const chatOpts = () => ({ deepThinking: !!state.settings.deepThinking, cloudModel: !!state.settings.cloudModel, computerControl: !!state.settings.computerControl });
 
 function composeText(raw) {
   let t = raw.trim();
@@ -1003,11 +1008,12 @@ function saveSetting(patch, immediate = false) {
 
 // ------------------------------------------------------------------ panels
 const $panel = $('panelOverlay'), $panelBody = $('panelBody');
-const PANEL_TITLES = { models: 'Models', api: 'API provider', settings: 'Settings' };
+const PANEL_TITLES = { models: 'Models', api: 'API provider', gameplay: 'Gameplay', settings: 'Settings' };
 
 function openPanel(name, opts = {}) {
   closeMenu();
   state.panel = name; state.welcome = !!opts.welcome;
+  if (name === 'gameplay') gp.data = null;                      // always show what is on disk now
   $panel.hidden = false;
   renderPanel();
   if (name === 'models' && !state.scan) runScan();
@@ -1018,7 +1024,7 @@ function renderPanel() {
   $('panelTitle').textContent = PANEL_TITLES[state.panel] || '';
   document.querySelectorAll('#panelTabs .tab').forEach(t => t.setAttribute('aria-selected', t.dataset.panel === state.panel));
   $panelBody.innerHTML = '';
-  ({ models: renderModelsPanel, api: renderApiPanel, settings: renderSettingsPanel })[state.panel]();
+  ({ models: renderModelsPanel, api: renderApiPanel, gameplay: renderGameplayPanel, settings: renderSettingsPanel })[state.panel]();
   $panelBody.scrollTop = keep;
 }
 
@@ -1351,6 +1357,230 @@ function renderSettingsPanel() {
         h('button', { class: 'btn sm', type: 'button', text: 'Open data folder', onclick: () => api().open_folder('data') }))));
 }
 
+// ------------------------------------------------------------------ Gameplay panel
+// Each card is built by its own function and repainted on its own, so typing in one never loses focus to another card's update.
+function gpRepaint(...names) {
+  if (state.panel !== 'gameplay' || !gp.data) return;
+  const builders = { game: gpGameCard, run: gpRunCard, setup: gpSetupCard, boss: gpBossCard };
+  for (const n of names) {
+    const old = $panelBody.querySelector(`[data-gp="${n}"]`);
+    if (old && builders[n]) old.replaceWith(builders[n]());
+  }
+}
+async function gpLoad(game) {
+  gp.data = await api().gameplay_state(game === undefined ? gp.game : game);
+  gp.game = gp.data.game.id;
+  if (state.panel === 'gameplay') renderPanel();
+}
+async function gpReload(...names) {
+  gp.data = await api().gameplay_state(gp.game);
+  gpRepaint(...(names.length ? names : ['run', 'setup', 'boss']));
+}
+function gpLog(text) { if (!text) return; gp.log.push(text); if (gp.log.length > 60) gp.log.shift(); gpRepaint('run'); }
+function gpShowReply() { const el = $('gpReply'); if (!el) return; el.textContent = gp.reply; el.hidden = !gp.reply; }
+
+function renderGameplayPanel() {
+  const b = $panelBody;
+  if (!gp.data) {
+    b.append(h('div', { class: 'muted', text: 'Loading...' }));
+    gpLoad().catch(e => { b.replaceChildren(h('div', { class: 'banner warn', text: 'Could not load Gameplay: ' + e })); });
+    return;
+  }
+  b.append(...[
+    !cloudConfigured() ? h('div', { class: 'banner warn', text: 'Gameplay reads the screen with a vision model, so it needs an API provider (Menu > API provider). A local vision model is not supported yet.' }) : null,
+    h('div', { class: 'banner', text: 'Reo plays by tapping spots you teach him in the game window, and learns a boss by keeping notes between attempts. Press Esc at any time to stop him.' }),
+    gpGameCard(), gpRunCard(), gpSetupCard(), gpBossCard(), gpMsgCard(),
+  ].filter(Boolean));
+}
+
+function gpGameCard() {
+  const d = gp.data, g = d.game;
+  const save = async patch => {
+    const r = await api().gameplay_save_game(g.id, patch);
+    if (r.error) return toast(r.error, true);
+    gp.data = r; gpRepaint('run', 'setup', 'boss'); gpSyncTeach();
+  };
+  const sel = h('select', { class: 'in', id: 'gpGameSel', 'aria-label': 'Game' }, d.games.map(x => h('option', { value: x.id, selected: x.id === g.id, text: x.name })));
+  sel.addEventListener('change', () => gpLoad(sel.value));
+  const addName = h('input', { class: 'in', id: 'gpNewGame', placeholder: 'New game name' });
+  const title = h('input', { class: 'in', id: 'gpTitle', value: g.window_title || '', placeholder: 'e.g. Grand Cross' });
+  title.addEventListener('change', () => save({ window_title: title.value }));
+  const boss = h('input', { class: 'in', id: 'gpBoss', value: g.boss || '', placeholder: 'e.g. demon-king' });
+  boss.addEventListener('change', () => save({ boss: boss.value }));
+  const att = h('input', { class: 'in', id: 'gpAttempts', type: 'number', min: 1, max: 200, value: g.max_attempts });
+  att.addEventListener('change', () => save({ max_attempts: +att.value || 1 }));
+  const sw = h('button', { class: 'switch', id: 'gpStopWin', type: 'button', role: 'switch', 'aria-checked': String(!!g.stop_on_win),
+    onclick: () => { const v = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', v); save({ stop_on_win: v }); } },
+    h('span', { class: 'track' }, h('span', { class: 'thumb' })), h('span', { text: 'Stop when Reo wins' }));
+  return h('div', { class: 'card', 'data-gp': 'game' }, h('h3', { text: 'Game' }),
+    h('div', { class: 'gp-row' }, sel, addName, h('button', { class: 'btn sm', id: 'gpAddGame', type: 'button', text: 'Add game', onclick: async () => {
+      const n = addName.value.trim(); if (!n) return;
+      gp.data = await api().gameplay_new_game(n); gp.game = gp.data.game.id; renderPanel();
+    } })),
+    h('div', { class: 'grid2' },
+      h('div', { class: 'field' }, h('label', { text: 'Game window title' }), title, h('div', { class: 'hint2', text: 'Part of the title is enough.' })),
+      h('div', { class: 'field' }, h('label', { text: 'Boss' }), boss, h('div', { class: 'hint2', text: 'Each boss keeps its own notes and playbook.' }))),
+    h('div', { class: 'grid2' },
+      h('div', { class: 'field' }, h('label', { text: 'Maximum attempts' }), att),
+      h('div', { class: 'field' }, h('label', { text: 'When it wins' }), sw)));
+}
+
+async function gpStart() {
+  const g = gp.data.game, val = id => (document.getElementById(id) || {}).value;
+  const saved = await api().gameplay_save_game(g.id, { window_title: val('gpTitle') ?? g.window_title, boss: val('gpBoss') ?? g.boss, max_attempts: +val('gpAttempts') || g.max_attempts });
+  if (saved.error) return toast(saved.error, true);
+  gp.data = saved; gpRepaint('run', 'setup', 'boss');
+  const r = await api().gameplay_start(g.id, saved.game.boss, saved.game.max_attempts, saved.game.stop_on_win);
+  if (r.error) { toast(r.problems && r.problems.length ? `${r.error} ${r.problems[0]}` : r.error, true, 6000); return; }
+  Object.assign(gp, { running: true, log: [], attemptsDone: 0, progress: { attempt: 0, turn: 0, hp: null }, screen: '', prompt: '' });
+  gpRepaint('run', 'setup'); updateUI();
+}
+
+function gpRunCard() {
+  const d = gp.data, g = d.game, p = gp.progress || {}, busy = gp.running || gp.calibrating;
+  const status = gp.running
+    ? `Attempt ${p.attempt || 1}${p.turn ? `, turn ${p.turn}` : ''}${p.hp != null ? `, boss at ${Math.round(p.hp)}%` : ''}${gp.screen ? ` (screen: ${gp.screen})` : ''}`
+    : d.problems.length ? `Not ready: ${d.problems.length} thing${d.problems.length === 1 ? '' : 's'} left to set up` : 'Ready to play';
+  return h('div', { class: 'card', 'data-gp': 'run' }, h('h3', { text: 'Play' }),
+    gp.prompt ? h('div', { class: 'gp-prompt', id: 'gpPrompt', role: 'status', text: gp.prompt }) : null,
+    h('div', { class: 'status-line' + (gp.running ? ' ok' : ''), id: 'gpStatus', text: status }),
+    gp.running ? h('div', { class: 'progress' }, h('i', { style: `width:${Math.min(100, Math.round(100 * gp.attemptsDone / Math.max(1, g.max_attempts)))}%` })) : null,
+    h('div', { class: 'gp-btns' },
+      h('button', { class: 'btn primary', id: 'gpStart', type: 'button', text: 'Start', disabled: busy, onclick: gpStart }),
+      h('button', { class: 'btn danger', id: 'gpStop', type: 'button', text: gp.calibrating ? 'Cancel' : 'Stop', disabled: !busy,
+        onclick: () => { if (gp.calibrating) api().gameplay_cancel(); else api().gameplay_stop(); } }),
+      h('button', { class: 'btn', type: 'button', text: 'Open game folder', onclick: () => api().gameplay_open_folder(g.id) })),
+    !gp.running && d.problems.length ? h('ul', { class: 'gp-list', id: 'gpProblems' }, d.problems.map(t => h('li', { text: t }))) : null,
+    gp.log.length ? h('div', { class: 'gp-log', id: 'gpLog' }, gp.log.slice(-8).map(t => h('div', { text: t }))) : null);
+}
+
+function gpSetupCard() {
+  const d = gp.data, g = d.game, targets = g.targets || [], lock = gp.running || gp.calibrating;
+  const set = (kind, name) => async () => {
+    if (lock) return;
+    const r = await api().gameplay_calibrate(g.id, kind, name);
+    if (r.error) return toast(r.error, true);
+    gp.calibrating = true; gp.prompt = 'Switching to the game...'; gpRepaint('run', 'setup');
+  };
+  const rm = (kind, name) => async () => { gp.data = await api().gameplay_remove(g.id, kind, name); gpRepaint('setup', 'run', 'boss'); };
+  const badge = ok => h('span', { class: 'badge ' + (ok ? 'good' : 'mid'), text: ok ? 'Set' : 'Not set' });
+  const addRow = (kind, placeholder, label, value = '') => {
+    const inp = h('input', { class: 'in', placeholder, value, 'aria-label': label });
+    return h('div', { class: 'gp-row' }, inp, h('button', { class: 'btn sm', type: 'button', text: label, disabled: lock, onclick: () => { const n = inp.value.trim(); if (n) set(kind, n)(); } }));
+  };
+  const targetRows = targets.map(n => h('div', { class: 'gp-row' }, h('span', { class: 'nm', text: n }), badge(!!d.coords[n]),
+    h('button', { class: 'btn sm', type: 'button', text: d.coords[n] ? 'Redo' : 'Set', disabled: lock, onclick: set('target', n) }),
+    h('button', { class: 'btn sm danger', type: 'button', text: 'Remove', disabled: lock, onclick: rm('target', n) })));
+  const screenRows = Object.entries(d.screens).map(([name, cfg]) => {
+    const kids = [h('span', { class: 'nm', text: name }), badge(!!cfg.captured)];
+    if (name !== 'battle_ready') {
+      const tap = h('select', { class: 'in', title: 'What Reo taps when this screen shows', 'aria-label': name + ': tap' },
+        [h('option', { value: '', text: 'taps nothing' }), ...targets.map(t => h('option', { value: t, selected: t === cfg.tap, text: 'taps ' + t }))]);
+      const out = h('select', { class: 'in', title: 'Does this screen end a fight?', 'aria-label': name + ': result' },
+        [['', 'not a result'], ['win', 'result: win'], ['loss', 'result: loss']].map(([v, t]) => h('option', { value: v, selected: v === (cfg.outcome || ''), text: t })));
+      const upd = async () => { const r = await api().gameplay_screen_cfg(g.id, name, { tap: tap.value, outcome: out.value }); if (r.error) toast(r.error, true); else { gp.data = r; gpRepaint('run'); } };
+      tap.addEventListener('change', upd); out.addEventListener('change', upd);
+      kids.push(tap, out);
+    }
+    kids.push(h('button', { class: 'btn sm', type: 'button', text: cfg.captured ? 'Recapture' : 'Capture', disabled: lock, onclick: set('screen', name) }));
+    if (cfg.captured) kids.push(h('button', { class: 'btn sm danger', type: 'button', text: 'Clear', disabled: lock, onclick: rm('screen', name) }));
+    return h('div', { class: 'gp-row' }, kids);
+  });
+  const regionRows = Object.keys(d.regions).map(n => h('div', { class: 'gp-row' }, h('span', { class: 'nm', text: n }), badge(true),
+    h('button', { class: 'btn sm', type: 'button', text: 'Redo', disabled: lock, onclick: set('region', n) }),
+    h('button', { class: 'btn sm danger', type: 'button', text: 'Remove', disabled: lock, onclick: rm('region', n) })));
+  return h('div', { class: 'card', 'data-gp': 'setup' },
+    h('details', { class: 'gp-setup', open: gp.setupOpen, ontoggle: e => { gp.setupOpen = e.target.open; } },
+      h('summary', { text: 'Teach Reo this game' }),
+      h('div', { class: 'hint2', text: 'Press a button, switch to the game, hover over the spot and press F8. For screens and regions press F8 on the top-left corner, then on the bottom-right corner. A notification shows each prompt, so you can keep the game in front.' }),
+      h('h4', { text: 'Click targets (card slots, ultimate, buttons)' }), ...targetRows, addRow('target', 'New target, e.g. skip', 'Add target'),
+      h('h4', { text: 'Screens Reo recognizes (capture each one while the game shows it)' }), ...screenRows, addRow('screen', 'New screen, e.g. stage_select', 'Add screen'),
+      h('h4', { text: 'Zoomed regions (optional, sent at higher detail every turn)' }), ...regionRows, addRow('region', 'Region name', 'Add region', regionRows.length ? '' : 'hand')));
+}
+
+function gpBossCard() {
+  const d = gp.data, g = d.game, bs = d.boss;
+  if (!g.boss || bs.version == null) return h('div', { 'data-gp': 'boss', hidden: true });
+  const rules = h('textarea', { class: 'in', rows: 4, id: 'gpRules', placeholder: 'One rule per line, e.g. Save the ultimate for the second phase' });
+  rules.value = bs.rules || '';
+  const list = (items, empty) => items.length ? h('ul', { class: 'gp-list' }, items.map(t => h('li', { text: t }))) : h('div', { class: 'hint2', text: empty });
+  const hp = a => (a.boss_hp_left != null && a.outcome !== 'win') ? `, boss at ${Math.round(a.boss_hp_left)}%` : '';
+  return h('div', { class: 'card', 'data-gp': 'boss' }, h('h3', { text: 'Boss: ' + g.boss }),
+    h('div', { class: 'row' }, h('span', { class: 'badge gold', text: 'Playbook v' + bs.version }), bs.pending ? h('span', { class: 'badge mid', text: 'Testing a change' }) : null, h('span', { class: 'muted', text: bs.note || '' })),
+    h('div', { class: 'field' }, h('label', { text: 'Playbook rules (what Reo follows each turn)' }), rules,
+      h('div', { class: 'hint2', text: 'Reo adds and tests rules himself after losses, one change at a time. Saving here starts a fresh version.' }),
+      h('div', {}, h('button', { class: 'btn sm', id: 'gpSaveRules', type: 'button', text: 'Save rules', onclick: async () => {
+        const r = await api().gameplay_rules(g.id, g.boss, rules.value);
+        if (r.error) return toast(r.error, true);
+        gp.data = r; toast('Saved as playbook v' + r.boss.version); gpRepaint('boss', 'run');
+      } }))),
+    h('div', { class: 'field' }, h('label', { text: 'Results by playbook version' }),
+      list(bs.versions.map(v => `v${v.version}: ${v.n} attempt${v.n === 1 ? '' : 's'}, ${v.wins} won, boss left at ${Math.round(v.avg_hp)}% on average`), 'No attempts yet.')),
+    h('div', { class: 'field' }, h('label', { text: 'Verified facts' }), list(bs.profile, 'Nothing learned yet.')),
+    h('div', { class: 'field' }, h('label', { text: 'Ideas not tested yet' }), list(bs.hypotheses, 'None.')),
+    h('div', { class: 'field' }, h('label', { text: 'Recent attempts' }),
+      list(bs.attempts.slice(-8).reverse().map(a => `#${a.attempt} ${a.outcome}, turn ${a.turns}${hp(a)} (v${a.playbook_version})`), 'None yet.')));
+}
+
+function gpSyncTeach() {                       // the message card is never rebuilt (it holds typed text), so keep this button in step by hand
+  const b = $('gpTeach'); if (!b) return;
+  const boss = gp.data.game.boss;
+  b.disabled = !boss; b.title = boss ? 'Adds this to what Reo knows about the boss' : 'Enter a boss name first';
+}
+
+function gpMsgCard() {
+  const ta = h('textarea', { class: 'in', id: 'gpMsg', rows: 2, placeholder: 'Message Reo, or type something you learned about this boss...' });
+  const sendMsg = async () => {
+    const t = ta.value.trim(); if (!t) return;
+    if (pending) return toast('Reo is still answering', true);
+    ta.value = ''; gp.reply = 'Reo is answering...'; gp.awaitReply = true; gpShowReply();
+    await send(t);
+    if (!pending && gp.awaitReply) { gp.awaitReply = false; gp.reply = ''; gpShowReply(); }   // the message was refused: nothing is coming back
+  };
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+  return h('div', { class: 'card', 'data-gp': 'msg' }, h('h3', { text: 'Talk to Reo' }), ta,
+    h('div', { class: 'gp-btns' },
+      h('button', { class: 'btn primary', id: 'gpSend', type: 'button', text: 'Send to Reo', onclick: sendMsg }),
+      h('button', { class: 'btn', id: 'gpTeach', type: 'button', text: 'Save as boss fact', disabled: !gp.data.game.boss, title: gp.data.game.boss ? 'Adds this to what Reo knows about the boss' : 'Enter a boss name first', onclick: async () => {
+        const t = ta.value.trim(); if (!t) return;
+        const g = gp.data.game;
+        const r = await api().gameplay_teach(g.id, g.boss, t);
+        if (r.error) return toast(r.error, true);
+        ta.value = ''; gp.data = r; toast('Saved to the boss profile'); gpRepaint('boss');
+      } })),
+    h('div', { class: 'gp-reply', id: 'gpReply', hidden: !gp.reply, text: gp.reply }));
+}
+
+function onGameplayEvent(ev) {
+  switch (ev.kind) {
+    case 'status': gp.running = !!ev.running; updateUI(); gpRepaint('run', 'setup'); break;
+    case 'attempt_start': gp.progress = { attempt: ev.attempt, turn: 0, hp: null }; updateUI(); gpRepaint('run'); break;
+    case 'turn': gp.progress = { attempt: ev.attempt, turn: ev.turn, hp: ev.hp }; gpLog(`Turn ${ev.turn}: ${ev.reason || 'moved'}`); break;
+    case 'screen': gp.screen = ev.state; gpRepaint('run'); break;
+    case 'log': gpLog(ev.text); break;
+    case 'attempt':
+      gp.attemptsDone += 1; gpLog(ev.message);
+      if (orbMode) showPopup(ev.message);
+      gpReload('run', 'boss');
+      break;
+    case 'calibrate':
+      if (ev.phase === 'wait') { gp.calibrating = true; gp.prompt = ev.text; gpRepaint('run', 'setup'); break; }
+      gp.calibrating = false; gp.prompt = '';
+      if (ev.phase === 'done') toast(`Saved '${ev.name}'`);
+      else if (ev.error && ev.error !== 'Cancelled.') toast(ev.error, true, 6000);
+      gpReload();
+      break;
+    case 'done': {
+      gp.running = false; gp.screen = ''; gp.prompt = '';
+      const why = ev.stopped === 'Stopped.' ? 'Gameplay stopped.' : ev.finished ? ev.stopped : `Gameplay stopped: ${ev.stopped || 'unknown reason'}`;
+      gpLog(why); toast(why, !ev.finished && ev.stopped !== 'Stopped.', 7000);
+      if (orbMode) showPopup(why);
+      updateUI(); gpReload();
+      break;
+    }
+  }
+}
+
 // ------------------------------------------------------------------ init + events
 async function whenReady() {
   if (window.pywebview && window.pywebview.api && window.pywebview.api.boot) return;
@@ -1368,11 +1598,7 @@ function wire() {
     const m = $send.dataset.mode;
     if (m === 'stop') api().stop(); else if (m === 'send') send(); else toggleDictation();
   });
-  $game.addEventListener('click', () => {
-    const v = !state.settings.gameplay; saveSetting({ gameplay: v }, true);
-    flash(v ? 'Gameplay mode on' : 'Gameplay mode off');
-    if (typeof window.onGameplay === 'function') window.onGameplay(v);       // host hook: start/stop the game-playing loop
-  });
+  $game.addEventListener('click', () => openPanel('gameplay'));
   window.addEventListener('resize', resize);
   $('orbBtn').addEventListener('click', () => setOrbMode(true));
   $('orbExit').addEventListener('click', () => setOrbMode(false));

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 import threading
@@ -30,6 +31,10 @@ PRESETS = {
 
 class CloudError(RuntimeError):
     pass
+
+
+def _mime(data: bytes) -> str:
+    return "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
 
 
 def _friendly(status: int, body: str) -> str:
@@ -86,6 +91,58 @@ class CloudEngine:
             raise CloudError(_friendly(r.status_code, r.text))
         ids = [str(m.get("id", "")).removeprefix("models/") for m in r.json().get("data", [])]
         return sorted(i for i in ids if i)
+
+    # ---- one-shot call with images (used by Gameplay to read the screen) ------------------
+    def vision(self, system: str, text: str, images: list[bytes], params: dict | None = None) -> str:
+        """Non-streaming request carrying screenshots (PNG/JPEG bytes). Returns the reply text."""
+        c = self.config()
+        if not self.ready():
+            raise CloudError("The API provider is not configured (key, model, base URL)")
+        params = params or {}
+        enc = [(_mime(b), base64.b64encode(b).decode()) for b in images]
+        max_tokens = int(params.get("max_tokens", 900))
+        temperature = params.get("temperature", 0.3)
+        if c["protocol"] == "anthropic":
+            content = [{"type": "image", "source": {"type": "base64", "media_type": m, "data": d}} for m, d in enc]
+            content.append({"type": "text", "text": text})
+            body = {"model": c["model"], "max_tokens": max_tokens, "temperature": temperature,
+                    "messages": [{"role": "user", "content": content}]}
+            if system:
+                body["system"] = system
+            data = self._post(c, c["base"] + "/messages", body)
+            return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        content = [{"type": "text", "text": text}]
+        content += [{"type": "image_url", "image_url": {"url": f"data:{m};base64,{d}"}} for m, d in enc]
+        body = {"model": c["model"], "temperature": temperature, "max_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]}
+        for _ in range(4):                          # strip parameters the model rejects, then retry
+            try:
+                data = self._post(c, c["base"] + "/chat/completions", body)
+                return (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            except CloudError as e:
+                msg = str(e).lower()
+                if not msg.startswith("400"):
+                    raise
+                if "max_tokens" in msg and "max_tokens" in body:
+                    body["max_completion_tokens"] = body.pop("max_tokens")
+                elif "temperature" in msg and "temperature" in body:
+                    body.pop("temperature")
+                else:
+                    raise
+        raise CloudError("The provider kept rejecting the request")
+
+    def _post(self, c: dict, url: str, body: dict) -> dict:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(20, read=120)) as client:
+                r = client.post(url, headers=self._headers(c), json=body)
+        except httpx.HTTPError as e:
+            raise CloudError(f"Network error: {e}") from e
+        if r.status_code >= 400:
+            raise CloudError(_friendly(r.status_code, r.text))
+        try:
+            return r.json()
+        except ValueError as e:
+            raise CloudError("The provider sent an unreadable reply") from e
 
     # ---- streaming -----------------------------------------------------------------------
     def stream(self, history: list[dict], system_prompt: str, params: dict, deep: bool,
